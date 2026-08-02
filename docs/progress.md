@@ -78,6 +78,14 @@
 - Wrote `README.md` (setup, `.env` config, how to run `gate`/`evaluate`, current status) — there
   was previously just a title line.
 - Added `tests/test_gemini_client.py` for the new `_load_api_keys` precedence/parsing logic.
+- Batched `judge_matches()` and `triage_fp_candidates()` into one LLM call per run instead of
+  one per matched pair / FP candidate (Matcher was already batched N:M per document×category
+  bucket, so left as-is — current data has ~1 category per doc, so bucket-merging wouldn't cut
+  call count anyway). Each batch call is indexed (`{"index": i, ...}`); if the model drops an
+  index from its response, only that one item falls back to the original single-item call
+  rather than failing the whole batch. Re-ran the same sample end-to-end afterward: same
+  DOC-006 AE-01 exception result, same recall, finished well under the previous run's time
+  (no longer needed to background it) — confirms the call-count reduction is real.
 
 ### Notes
 
