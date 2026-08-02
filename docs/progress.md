@@ -48,7 +48,47 @@
 
 ### Next
 
-- Get a real `GEMINI_API_KEY` (or install Ollama + pull a Qwen model) to actually run
-  `planqa-eval gate` once real review-agent output exists.
 - Real review-agent output JSON sample — validate/adjust `parsers/review_json.py` against it
   once available.
+
+## 2026-08-02 — Real Gemini API validation, multi-key rotation, README
+
+### Done
+
+- Added `data/sample_review_output.json`: a stand-in review-agent output built from the golden
+  dataset (since no real review agent exists yet), deliberately seeded with one omitted issue
+  (DOC-006 AE-01 — to exercise the exception-condition re-check on a real run), one wrong-Level
+  prediction (DOC-003 AE-03: Sentence→Paragraph), and two issues with no golden counterpart (to
+  exercise new-rule triage).
+- Ran the full pipeline against it with the real Gemini API (`run_pipeline` end-to-end, not the
+  fake `LLMClient`): recall/precision 89.5% (18/19), DOC-006 AE-01 correctly resolved to
+  `excused=False` (matches the rulebook's own counter-example and the unit test), the seeded
+  Level mismatch was caught, and the two seeded extra issues got sensible LLM triage verdicts
+  (`new_rule_candidate` and `false_positive` respectively).
+- Hit two real free-tier constraints along the way and fixed the first:
+  - `gemini-2.0-flash` had **zero** free-tier quota on this account/key — switched
+    `llm/gemini.py`'s `DEFAULT_MODEL` to `gemini-2.5-flash`, which has an actual (if small)
+    free tier.
+  - `gemini-2.5-flash` free tier is rate-limited (as low as 5 requests/minute, and as low as
+    20 requests/day on some model/key combos) — a single pipeline run easily exceeds this since
+    Matcher/Judge/triage each fire their own LLM call. Added 429 retry-with-backoff (honors the
+    API's `retryDelay` when present) plus **multi-key round-robin**: `GEMINI_API_KEYS`
+    (comma-separated) cycles through several keys/projects before falling back to sleep-and-
+    retry, multiplying the effective daily quota. `GEMINI_API_KEY` (single) still works.
+- Wrote `README.md` (setup, `.env` config, how to run `gate`/`evaluate`, current status) — there
+  was previously just a title line.
+- Added `tests/test_gemini_client.py` for the new `_load_api_keys` precedence/parsing logic.
+
+### Notes
+
+- The daily-quota constraint is severe enough that even modest pipeline runs (a few dozen
+  issues) can burn through a single free key's daily budget. Multi-key rotation is a workaround,
+  not a fix — if this becomes a recurring blocker, revisit Ollama (no quota at all, per
+  memory: planqa-model-selection-policy) or enabling billing on the Gemini project.
+
+### Next
+
+- Real review-agent output JSON sample — validate/adjust `parsers/review_json.py` against it
+  once available.
+- Fill in a real 2-1 gate human-label file and confirm the gate actually passes/fails
+  meaningfully (only tested with fake `LLMClient` scripted agreement so far).
