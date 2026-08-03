@@ -7,7 +7,7 @@ import httpx
 
 from planqa_eval.llm.base import LLMClient, parse_json_response
 
-DEFAULT_MODEL = "qwen2.5:7b"
+DEFAULT_MODEL = "qwen2.5:1.5b"
 DEFAULT_HOST = "http://localhost:11434"
 
 

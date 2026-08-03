@@ -100,3 +100,32 @@
   once available.
 - Fill in a real 2-1 gate human-label file and confirm the gate actually passes/fails
   meaningfully (only tested with fake `LLMClient` scripted agreement so far).
+
+## 2026-08-02 — Verified the Ollama/Qwen backend end-to-end
+
+### Done
+
+- Installed Ollama (`brew install ollama`, `brew services start ollama`) and pulled
+  `qwen2.5:1.5b` (~1GB) to actually exercise `llm/ollama.py`, which had only ever been
+  structurally reviewed, never run.
+- Ran the same `data/sample_review_output.json` pipeline against it: recall/precision 84.2%
+  (18/19 matched), no quota issues at all (fully local).
+- Real finding, not a bug: DOC-006 has two golden issues (AE-01, AE-03) at the same location
+  ("2-1~2-4 전반"), a genuine 2:1 matching problem for that bucket. Gemini matched them
+  correctly (missed AE-01). `qwen2.5:1.5b` matched them the other way around (missed AE-03
+  instead) — a real quality difference between backends on an ambiguous case, exactly what
+  the 2-1 confidence gate exists to catch (memory: planqa-model-selection-policy).
+- Changed `llm/ollama.py`'s `DEFAULT_MODEL` from `qwen2.5:7b` (never actually pulled/tested)
+  to `qwen2.5:1.5b` (the one actually verified), per user's choice to standardize on the
+  smaller model rather than also downloading the untested 4.7GB 7b variant.
+- Updated `README.md` with the Ollama install/pull steps and the Ollama results.
+
+### Next
+
+- Real review-agent output JSON sample — validate/adjust `parsers/review_json.py` against it
+  once available.
+- Fill in a real 2-1 gate human-label file and confirm the gate actually passes/fails
+  meaningfully (only tested with fake `LLMClient` scripted agreement so far).
+- If Qwen is ever considered for real (non-testing) use, the DOC-006-style ambiguous-match
+  weakness found here means it should not be trusted without first passing the 2-1 gate on a
+  stratified sample that includes multi-issue-per-location cases like this one.

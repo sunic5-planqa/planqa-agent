@@ -30,7 +30,12 @@ cp .env.example .env
 - Gemini 무료 티어는 하루 요청 한도가 낮습니다(모델/키마다 다르지만 하루 20회 수준도 있음). 여러
   키를 콤마로 묶어 `GEMINI_API_KEYS`에 넣으면 한 키가 quota에 걸릴 때마다 자동으로 다음 키로
   넘어가며 씁니다 (`GEMINI_API_KEY` 단일 키도 계속 지원).
-- Ollama를 쓰려면 로컬에 [Ollama](https://ollama.com)를 설치하고 Qwen 모델을 pull해둬야 합니다.
+- Ollama를 쓰려면 로컬에 [Ollama](https://ollama.com)를 설치하고 Qwen 모델을 pull해둬야 합니다:
+  ```bash
+  brew install ollama
+  brew services start ollama
+  ollama pull qwen2.5:1.5b   # 기본 모델, 검증 완료
+  ```
 
 ## 실행
 
@@ -64,6 +69,11 @@ Judge→신규룰 판별→Aggregator→Reporter) 검증 완료:
 - DOC-006 AE-01 예외조건 반례가 실제 LLM 파이프라인에서도 정확히 판정됨 (`excused=False`)
 - 일부러 넣은 레벨 오분류(DOC-003 AE-03: Sentence→Paragraph)와 신규이슈 2건(new_rule_candidate /
   false_positive 판정)도 의도대로 잡힘
+
+로컬 Ollama(`qwen2.5:1.5b`)로도 같은 파이프라인 검증 완료 (recall/precision 84.2%, quota 없이
+바로 실행됨). DOC-006처럼 같은 위치에 골든 이슈가 2개(AE-01/AE-03) 겹치는 애매한 매칭에서는
+Gemini보다 약한 모습을 보였는데 — 이런 모델별 신뢰도 차이를 잡아내는 게 바로 2-1 게이트의 역할
+입니다 (메모리: planqa-model-selection-policy).
 
 검토 에이전트의 실제 JSON 출력은 아직 없어서 입력 스키마는 가정 상태입니다. 자세한 작업 이력은
 `docs/progress.md`, 설계 결정은 `docs/adr/`를 참고하세요.
