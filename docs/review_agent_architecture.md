@@ -1,0 +1,167 @@
+# 기획서 검토 에이전트 (`planqa-review`) 아키텍처
+
+> 상태: 초안(v1). 사용자가 기획서(markdown)를 넣으면 `data/rulebook/rulebook_v1.0.md`
+> 룰북(8개 카테고리, 40개 룰) 기준으로 검토하고, 결과를 **원문 vs 제안 diff** 형태로 보여준다.
+>
+> 이 에이전트는 `planqa_eval.review_agent` 서브패키지로 구현되어 있다. 저장소 최상위
+> [`README.md`](../README.md)가 "룰북 기반 기획서 품질 검토 에이전트(별도 프로젝트, 아직
+> 미완성)"라고 부르던, 이제까지 없던 그 조각이다.
+
+## 왜 이렇게 만들었나
+
+멘토링 노트(`0730 멘토링...md`)에서 두 가지가 이미 승인된 방향으로 나왔고, 이 구현은 그대로
+따른다.
+
+1. **2단계(저비용 스크리닝 → 고비용 정밀판정) 구조** — "방안 2 프로세스 예시" 이미지가 보여준
+   방식. 토큰 가성비와 실시간성을 동시에 잡으려면 넓게/싸게 의심 구간을 넓게 잡아내고, 좁혀진
+   구간만 비싼 모델로 정밀 판정하는 게 낫다는 멘토 코멘트("방식2가 효율성이 높아 보임")를
+   반영했다.
+2. **Global Context → Target Selection → Parallel Execution → Result Collect & Dedupe**의
+   4단계 오케스트레이션 — "전체 흐름을 검토받고 싶다"는 질문에 대한 답으로 나온 구조. 여기서는
+   Target Selection이 룰북 §1의 문서 위계(문서/논리단위/문단/문장) 분할이고, Parallel
+   Execution이 위계별 스크리닝→정밀판정, Dedupe가 5단계다.
+
+## 6단계 파이프라인
+
+```mermaid
+flowchart TD
+    A["기획서 업로드\n(markdown 파일)"] --> B["1. Global Context 추출\n(정밀 모델 1회)"]
+    B --> C["2. 위계 분할\n(순수 코드)"]
+    C --> D["3. 위계별 카테고리 배정\n(룰북 §2)"]
+    D --> E1["4-A 문서 tier\n스크리닝 → 정밀판정"]
+    D --> E2["4-B 논리단위 tier\n스크리닝 → 정밀판정"]
+    D --> E3["4-C 문단 tier\n스크리닝 → 정밀판정"]
+    D --> E4["4-D 문장 tier\n스크리닝 → 정밀판정"]
+    E1 --> F["5. 중복 제거"]
+    E2 --> F
+    E3 --> F
+    E4 --> F
+    F --> G["6. diff 리포트\nreview.json + review.md"]
+```
+
+### 1. Global Context Extraction — [`context.py`](../src/planqa_eval/review_agent/context.py)
+
+문서 전체를 정밀 모델에 1번 보내 목적·핵심 정책을 압축 요약한다. 이 요약은 이후 모든
+스크리닝/정밀판정 프롬프트 앞에 붙는다 — 매 호출마다 문서 전체를 다시 첨부하지 않아도 GA(상위
+목표 정합성) 판단 등이 문맥을 잃지 않게 하기 위해서다("여러 AI 세션 간 맥락 유지"에 대한
+멘토링 노트의 조언과 같은 취지).
+
+### 2. 위계 분할 — [`document.py`](../src/planqa_eval/review_agent/document.py)
+
+룰북 §1 정의를 그대로 코드로 옮긴다.
+
+| 위계 | 분할 기준 |
+|---|---|
+| 문서 | 파일 전체 1개 청크 |
+| 논리단위 | `## ` (H2) 제목 경계 |
+| 문단 | 논리단위 안의 `### ` 이상(H3+) 제목 경계. 하위 제목이 없으면 논리단위 전체가 문단 1개 |
+| 문장 | 문단을 다시 분리 — 불릿 한 줄, 표의 행 한 줄, 마침표 기준 프로즈 문장을 각각 1 단위로 취급 (§1: "표의 셀 1개, 불릿 1개도 문장으로 본다" — v1은 셀 단위 대신 행 단위로 근사) |
+
+`data/source_documents/DOC-001_*.md`의 실제 구조(`## 6. 프로덕트 기능` → `### 홈 화면 구성
+요소` → `#### 6-1. 메인 배너`)로 검증했다.
+
+### 3. 위계별 카테고리 배정 — [`tiers.py`](../src/planqa_eval/review_agent/tiers.py)
+
+룰북 §2 "카테고리별 검토 위계" 표를 상수로 옮겼다.
+
+| 위계 | 카테고리 |
+|---|---|
+| 문서 | 논리비약, 논리흐름, 용어및단어일관성, 정보누락, 불필요한중복, 상위목표세부내용정합성 |
+| 논리단위 | 논리비약, 논리흐름, 용어오용, 모호한표현, 정보누락 |
+| 문단 | 용어오용, 정보누락 |
+| 문장 | 용어오용, 모호한표현 |
+| 단어 | (§2 표에 미기재 — 아래 "알려진 제약" 참고) |
+
+이 표는 코드로 하드코딩했다. §2 원문이 Notion 내보내기 특성상 표 셀 안에 개행이 들어간
+비표준 마크다운이라(`카테고리` 셀 하나에 "① 논리 비약\n② 논리 흐름\n..."처럼 여러 줄이 들어감)
+정규식으로 안정적으로 파싱하기 어렵고, 원문 자체도 "검토 호출은... 총 3회"라는 서술과 표의
+5행(1차~5차)이 서로 안 맞는 초안 상태라 — 파서를 정교하게 짜는 비용 대비 이득이 낮다고 판단했다.
+`rulebook_v1.0.md` §2가 바뀌면 `tiers.py`의 `TIER_CATEGORIES`를 같이 갱신해야 한다.
+
+### 4. 위계별 2단계 검토 — [`screener.py`](../src/planqa_eval/review_agent/screener.py) / [`confirmer.py`](../src/planqa_eval/review_agent/confirmer.py)
+
+위계마다 **스크리닝 1회 배치 호출 → 정밀판정 1회 배치 호출**을 수행한다. `matcher.py`/
+`judge.py`가 이미 쓰고 있는 "인덱스 태그 배치 + 배치 응답에서 인덱스가 빠지면 조용히 스킵"
+패턴을 그대로 따랐다(평가 에이전트 쪽 코드와 스타일을 맞춤).
+
+- **스크리닝(저비용 모델)**: 해당 위계의 청크 전체 + 배정된 카테고리의 룰 한 줄 요약 +
+  Global Context → recall 우선으로 넓게 후보를 나열한다.
+  `{chunk_index, rule_id, quoted_text, reason}`
+- **정밀판정(고비용 모델)**: 후보마다 룰 전문 + 예외조건 + 청크 전체 원문 + Global Context →
+  엄격하게 재검증한다. `{violated, original_text(근거문장), description(위반내용),
+  rationale(근거), fix_direction(개선안), excused, excuse_reason}`
+
+**예외조건(§3)은 LLM 자기 판단을 믿지 않는다.** LG-04/TC-02/AE-01/GA-03 네 개 룰은 평가
+에이전트가 이미 검증해둔 결정론적 휴리스틱
+[`verifier.has_valid_reference_exception`](../src/planqa_eval/verifier.py)을 그대로
+재사용해 최종 확정한다. LLM이 `excused=false`라고 답해도 이 휴리스틱이 "같은 문단 안에 인용
+표기가 있다"고 판단하면 예외로 처리하고 이슈를 버린다(`confirmer.py`의
+`_is_reference_excused`). DOC-006 AE-01 반례로 이미 검증된 로직을 그대로 가져다 쓴 것.
+
+### 5. 중복 제거 — [`dedupe.py`](../src/planqa_eval/review_agent/dedupe.py)
+
+§2에서 여러 카테고리(예: 정보누락)가 2~3개 위계에 동시에 배정돼 있어서, 같은 문제를 서로 다른
+위계에서 중복으로 지적할 수 있다. `rule_id`가 같고 위치 문자열이 포함 관계(`"1. 목적"` ⊂
+`"1. 목적 > a. 배경"`)면 더 좁은(구체적인) 위계의 이슈만 남긴다. **알려진 한계**: 문서 위계의
+`location`은 문서 제목이라 하위 위계 location과 문자열로 겹치지 않으므로, 문서 위계 vs
+논리단위/문단/문장 위계 사이의 중복은 현재 걸러지지 않는다 — 실제로 겹치는 사례가 나오면
+`rule_id` + 텍스트 유사도 기반 판정으로 넘어가야 할 수 있다.
+
+### 6. Diff 리포트 — [`diff_report.py`](../src/planqa_eval/review_agent/diff_report.py)
+
+- **`review.json`**: [`docs/adr/0001-review-agent-output-contract.md`](adr/0001-review-agent-output-contract.md)
+  계약과 필드 단위로 호환된다(`doc_id, level, rule_id, location, description, exception_ref,
+  issue_id` + 참고용 `original_text/rationale/fix_direction`). 그래서 이 출력을 바로
+  `planqa-eval evaluate --predictions <이 파일>`에 넣을 수 있다 — 검토 에이전트와 평가
+  에이전트가 이 저장소 안에서 실제로 맞물린다.
+- **`review.md`**: 이슈마다 카테고리/룰/위치/문제 설명 뒤에 `original_text` → `fix_direction`을
+  `difflib.SequenceMatcher`로 줄 단위 비교해 ` ```diff ` 펜스 블록(`- 원문` / `+ 제안`)으로
+  렌더링한다. GitHub/VSCode 마크다운 미리보기가 이 펜스를 자동으로 빨강/초록으로 칠해준다 —
+  "diff 방식으로 노출"이라는 요구사항을 그대로 만족.
+
+## 재사용한 기존 코드
+
+| 무엇 | 어디서 | 왜 |
+|---|---|---|
+| `RuleBook`/`RuleDef`/`parse_rulebook` | `rulebook.py` | 룰 텍스트·예외조건·카테고리를 이미 파싱해둠 |
+| `Issue`/`Level` | `schema.py` | 검토 에이전트 출력 스키마 = 평가 에이전트 입력 스키마 |
+| `LLMClient`/`build_llm_client` | `llm/` | 백엔드(gemini/ollama) 스왑, 스크리닝용/정밀판정용 클라이언트를 서로 다른 모델로 각각 생성 |
+| `has_valid_reference_exception` | `verifier.py` | §3 예외조건의 결정론적 최종 확정 |
+| `ScriptedLLM` | `tests/conftest.py` | 신규 모듈 테스트에 동일 패턴 재사용 (네트워크 불필요) |
+
+## 실행 방법
+
+```bash
+uv run planqa-review review \
+  --input data/source_documents/DOC-001_홈화면_PRD_v1.0.md \
+  --doc-id DOC-001 \
+  --backend gemini --screen-model gemini-2.5-flash-lite --verify-model gemini-2.5-pro
+# → outputs/review/<timestamp>/review.json, review.md
+```
+
+`--backend`/`--screen-model`/`--verify-model`을 생략하면 기존 평가 에이전트와 동일하게
+`PLANQA_LLM_BACKEND`(기본 gemini) 환경변수와 백엔드 기본 모델을 쓴다. 스크리닝과 정밀판정은
+서로 다른 `LLMClient` 인스턴스이므로, 예를 들어 스크리닝은 Ollama(로컬 무료), 정밀판정은
+Gemini처럼 백엔드 자체를 다르게 가져갈 수도 있다(`llm/factory.py` 수정 없이 CLI 인자만으로).
+
+## 검증 상태
+
+- 신규 모듈 전부 `ScriptedLLM`으로 단위/엔드투엔드 테스트 작성 — 네트워크·API 키 없이
+  `uv run pytest`로 검증 가능 (`tests/test_review_*.py`, 이 세션에서 80개 전체 통과 확인).
+- `document.py`는 실제 `DOC-001` 원문으로도 위계 분할을 검증했다.
+- **실제 LLM(Gemini/Ollama)으로의 라이브 실행은 이 세션에서 하지 못했다** — 이 저장소의
+  기존 `docs/progress.md`에도 같은 제약이 기록돼 있듯, 이 환경에는 `GEMINI_API_KEY`/Ollama가
+  없다. `.env`를 채운 뒤 위 CLI 커맨드를 직접 돌려보는 것이 다음 단계다.
+
+## 알려진 제약 / 확장 포인트
+
+- **단어(Word) 위계 미구현** — 룰북 §2 표에 5차(단어) 행이 카테고리/입력 단위 모두 비어 있어
+  범위에서 제외했다. §2가 채워지면 `tiers.py`에 `Level.WORD` 항목을 추가하고, `document.py`에
+  용어 추출(예: 명사구/약어 후보 추출) 로직을 붙이면 된다.
+- **표는 셀이 아니라 행 단위로 문장화** — §1은 "표의 셀 1개"를 문장 단위로 보라고 하지만, v1은
+  행 전체를 한 단위로 취급한다. 셀 단위 분해가 필요해지면 `document.py`의
+  `_split_sentences`에서 `_TABLE_ROW_LINE` 분기만 손보면 된다.
+- **중복 제거가 문서 위계를 못 잡음** — 위 5단계 설명의 "알려진 한계" 참고.
+- **모델 티어 튜닝** — `--screen-model`/`--verify-model`을 노출해뒀으니, 실제 토큰 비용·
+  응답시간·오탐율을 측정해가며(멘토링 노트의 "Ablation 방식으로 각 통제 변인이 미치는 영향
+  분석" 제안과 같은 방식) 두 모델 배정을 조정할 수 있다.

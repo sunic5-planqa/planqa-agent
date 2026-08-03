@@ -100,3 +100,65 @@
   once available.
 - Fill in a real 2-1 gate human-label file and confirm the gate actually passes/fails
   meaningfully (only tested with fake `LLMClient` scripted agreement so far).
+
+## 2026-08-03 — Review agent v1 draft (the missing "separate project" this repo evaluates)
+
+### Done
+
+- New `planqa_eval.review_agent` subpackage (branch `feature/review-agent`, off
+  `feature/eval-agent`): the actual rulebook-based review agent, which up to now only
+  existed as a stand-in (`data/sample_review_output.json`). Given a fresh 기획서 markdown
+  file, it reviews it against `rulebook_v1.0.md` and outputs findings as an original-vs-
+  suggested diff. Design follows two things approved in the 0730 mentoring notes: the
+  cheap-screen/expensive-verify two-stage process ("방안 2"), and the Global Context ->
+  Target Selection -> Parallel Execution -> Dedupe 4-stage orchestration.
+- 6-stage pipeline: `context.py` (1x Global Context extraction, reused in every later
+  prompt) -> `document.py` (§1 hierarchy split: Document/Logical Unit/Paragraph/Sentence,
+  pure code, no LLM) -> `tiers.py` (§2 tier->category map, hand-transcribed — that table's
+  markdown cells contain literal newlines from a Notion export, not safely regex-parseable)
+  -> `screener.py` + `confirmer.py` (one batched screen call + one batched confirm call per
+  tier, same indexed-batch-with-drop-on-miss pattern as `matcher.py`/`judge.py`) ->
+  `dedupe.py` (same rule_id at overlapping locations collapses to the finest tier) ->
+  `diff_report.py` (`review.json` + `review.md`).
+- Reused rather than reimplemented: `rulebook.parse_rulebook`, `schema.Issue`/`Level`,
+  `llm.factory.build_llm_client` (called twice, once per stage, so screen/confirm can run
+  different models or even different backends), and — importantly —
+  `verifier.has_valid_reference_exception` for the §3 reference-exception rules
+  (LG-04/TC-02/AE-01/GA-03): the LLM's own `excused` claim is not trusted, the same
+  deterministic proxy the eval-agent already validated against the DOC-006 AE-01 case
+  decides it.
+- `review.json` is field-compatible with `docs/adr/0001-review-agent-output-contract.md`,
+  so it plugs directly into `planqa-eval evaluate --predictions review.json` — the review
+  agent and the eval agent now actually connect inside this one repo.
+- `review.md` renders each issue's `original_text` -> `fix_direction` as a line-level
+  `difflib.SequenceMatcher` diff inside a ` ```diff ` fence, so GitHub/VSCode preview it
+  with red/green highlighting — the "diff 방식으로 노출" requirement.
+- New CLI: `planqa-review review --input <path.md> --doc-id DOC-001 [--backend]
+  [--screen-model] [--verify-model] [--out]` (`pyproject.toml` script entry added).
+- 7 new test files (`tests/test_review_*.py`), all against the existing `ScriptedLLM`
+  fixture — no network/API key needed. `document.py` also tested against the real
+  `DOC-001_*.md` source file's actual heading structure. Full suite: 80 passed (up from the
+  existing 35 + `test_gemini_client.py`'s addition).
+- `docs/review_agent_architecture.md`: the requested structure writeup — mermaid diagram of
+  the 6 stages, per-stage rationale tied back to the mentoring notes, reuse table, CLI usage,
+  and a "known limitations / extension points" section (word tier unassigned in rulebook §2,
+  table rows treated as one sentence unit instead of per-cell, dedupe doesn't catch
+  Document-tier vs finer-tier overlaps since the Document chunk's location is just the doc
+  title).
+
+### Notes
+
+- No Python/uv was on PATH in this sandbox by default (only the Windows Store stub); found a
+  real interpreter at `C:\Users\HYESEO\AppData\Local\Python\bin\python.exe`, built a throwaway
+  `.venv` (already gitignored) to run the test suite instead of `uv run`.
+- Same constraint as the rest of this repo: no `GEMINI_API_KEY`/Ollama available here, so this
+  was verified with `ScriptedLLM` only — no live LLM run yet.
+
+### Next
+
+- Run it for real against Gemini/Ollama on an actual source document, sanity-check the
+  screen/confirm prompts produce sensible diffs, and tune `--screen-model`/`--verify-model`
+  for cost vs. recall.
+- Decide the Document-tier vs finer-tier dedupe gap (see architecture doc) once a real
+  overlapping case shows up.
+- Word-tier review, once rulebook §2 actually assigns categories/input unit to it.

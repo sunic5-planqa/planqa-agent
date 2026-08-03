@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 planqa-eval = "planqa_eval.cli:main"
+planqa-review = "planqa_eval.review_agent.cli:main"
 
 [dependency-groups]
 dev = [
