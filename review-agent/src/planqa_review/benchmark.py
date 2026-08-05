@@ -7,25 +7,13 @@ from planqa_review.scoring import GoldenRow
 DEFAULT_SOURCE_DIR = Path("data/source_documents")
 DEFAULT_QA_DATASET = Path("data/qa_dataset/qa_dataset_frozen.xlsx")
 
-# DOC-001..020 are the real NxEF documents in scope for now (021-040 are teammate-generated
+# DOC-001..020 are the real NxEF documents in scope (021-040 are teammate-generated
 # synthetic docs reserved for later rule-coverage gap-filling; DOC-000 has no real source
-# text). Within that range this is the subset already manually reviewed before the ablation
-# infra existed — reusing it keeps ablation runs cheap while still covering both
-# true-positive-rich docs (all ten have golden rows) and a deliberate zero-violation
-# false-positive check (DOC-008).
-BENCHMARK_DOC_IDS: tuple[str, ...] = (
-    "DOC-003",
-    "DOC-004",
-    "DOC-005",
-    "DOC-006",
-    "DOC-007",
-    "DOC-008",
-    "DOC-010",
-    "DOC-011",
-    "DOC-012",
-    "DOC-015",
-    "DOC-016",
-)
+# text). The full 20-document range is used for structure ablation runs — DOC-013/DOC-020
+# have no golden rows yet and DOC-008 is a deliberate zero-violation false-positive check,
+# but all three are still valid for cost measurement (time/tokens), which doesn't depend on
+# golden-row coverage the way accuracy scoring would.
+BENCHMARK_DOC_IDS: tuple[str, ...] = tuple(f"DOC-{n:03d}" for n in range(1, 21))
 
 
 def resolve_source_path(source_dir: Path, doc_id: str) -> Path:
