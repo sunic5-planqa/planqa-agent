@@ -53,3 +53,27 @@ def test_review_json_accepts_bare_array_and_wrapped_object(tmp_path):
     assert parse_review_output(bare)[0].doc_id == "DOC-001"
     assert parse_review_output(wrapped)[0].doc_id == "DOC-001"
     assert parse_review_output(bare)[0].source == "review_agent"
+
+
+def test_review_json_captures_original_text_rationale_fix_direction(tmp_path):
+    # Confirmed present in the real review-agent sample (2026-08-05) — Judge reads
+    # fix_direction in particular, so silently dropping these would be a real regression.
+    sample = [
+        {
+            "doc_id": "DOC-001",
+            "level": "Sentence",
+            "rule_id": "AE-03",
+            "location": "x",
+            "description": "y",
+            "original_text": "원문",
+            "rationale": "근거",
+            "fix_direction": "수정 방향",
+        }
+    ]
+    path = tmp_path / "sample.json"
+    path.write_text(json.dumps(sample, ensure_ascii=False), encoding="utf-8")
+
+    [issue] = parse_review_output(path)
+    assert issue.original_text == "원문"
+    assert issue.rationale == "근거"
+    assert issue.fix_direction == "수정 방향"

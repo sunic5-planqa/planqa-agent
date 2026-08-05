@@ -185,3 +185,47 @@ Team confirmed the data in `~/Downloads/SuniC 10팀/` as the new source of truth
   document referenced by the `DOC-000-ES-*` issue IDs in Review1 — actually lives) and add it to
   `data/source_documents/`.
 - Real review-agent output JSON sample — still the biggest open item, unchanged from before.
+
+## 2026-08-05 — First real review-agent output sample, end-to-end against it
+
+Got a real sample (`review.json`, 6 issues, DOC-001 only) — the biggest open item from every
+prior session's Next list.
+
+### Done
+
+- Confirmed the assumed schema from ADR 0001 against real data: field names matched exactly,
+  including `issue_id`, plus `original_text`/`rationale`/`fix_direction` which the ADR hadn't
+  committed to but the golden/review-sheet parsers already expected. Updated
+  `parsers/review_json.py` to capture those three (Judge reads `fix_direction`; it was silently
+  `None` for every real prediction before this). ADR 0001 updated to Accepted with this
+  confirmation logged.
+- Added `data/review_agent_sample_output.json` (the real sample, copied in) alongside the
+  existing synthetic `data/sample_review_output.json` — the synthetic one still covers more
+  pipeline paths (multi-doc misses, the exception check, batching) since the real sample so far
+  is single-document.
+- Ran the full pipeline against the real sample with Gemini, golden dataset re-read fresh (no
+  crashes, no schema surprises): **0% recall/precision** — but this is a coverage artifact, not
+  a quality signal. The sample only has predictions for DOC-001; golden's actual DOC-001 issue
+  is `LG-05` ("KPI vs 기술 제약", Document level), while the review agent's 6 DOC-001
+  predictions were all `AE-03`/`TC-02` (모호한 표현 / 약어 미정의) in unrelated
+  sections — different rule category entirely, so Matcher correctly finds zero overlap (the
+  prefilter buckets by category; LG never shares a bucket with AE/TC). The other 130 golden
+  rows across other documents were never going to be recalled since the sample doesn't predict
+  anything for those documents either.
+- New-rule triage on the 6 unmatched predictions was mixed, not dismissive: 4× `human_review`
+  and 1× `new_rule_candidate` for the AE-03 findings (LLM judged them as plausibly real issues,
+  just not confidently classifiable as false or as a rulebook gap), 1× `false_positive` for one
+  AE-03, 1× `new_rule_candidate` for the TC-02 (abbreviation-undefined) finding. None were
+  dismissed as pure noise — worth reading the actual reasoning in `outputs/eval/
+  real_review_agent_test/report.md` rather than the raw 0% headline number.
+
+### Next
+
+- This 0%/0% run is not evidence the review agent is bad — it's evidence the sample is a
+  single-document smoke test. Re-run once the review agent has processed more documents (or all
+  40) to get a real recall/precision signal, and use *that* run for the 2-1 gate's stratified
+  sample instead of the synthetic file.
+- The DOC-001 rule-category mismatch (golden wants LG-05, agent found AE-03/TC-02) is worth a
+  quick manual look — is DOC-001's actual LG-05 issue a genuine miss by the review agent, or is
+  the golden dataset itself stale for DOC-001 relative to the current rulebook revision?
+- DOC-000 source text still missing (unchanged from 2026-08-05 rulebook-refresh entry above).

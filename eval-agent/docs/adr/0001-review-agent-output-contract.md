@@ -1,5 +1,5 @@
 - Title: Assume the review agent's JSON output matches the common Issue schema directly
-- Status: Draft
+- Status: Accepted (confirmed against a real sample 2026-08-05)
 - Date: 2026-08-02
 - Context: The PlanQA evaluation agent's Parser needs to normalize the review (검토) agent's
   JSON output into the common schema — `{doc_id, level, rule_id, location, description,
@@ -34,3 +34,12 @@
   file. `issue_id` should be requested from whoever builds the review agent, since the 2-1
   confidence gate's human-vs-machine comparison (`harness/confidence_gate.py`) matches by
   it.
+- Update (2026-08-05): a real sample (`review.json`, 6 issues for DOC-001) confirmed the
+  assumption — same field names, bare array, `issue_id` present — and additionally included
+  `original_text`, `rationale`, `fix_direction` (the same extra fields the golden/review-sheet
+  parsers already populate). `parse_review_output` updated to capture those three too, since
+  Judge reads `fix_direction` and was silently getting `None` for it on real predictions
+  before this. Ran the full pipeline against the sample: zero crashes, but recall/precision
+  landed at 0%/0% because the sample only covers DOC-001 (6 issues) against the full 131-row
+  golden set — not a real quality signal, just a coverage mismatch worth knowing before
+  reading any single-doc test run's numbers at face value.

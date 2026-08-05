@@ -6,10 +6,15 @@ from typing import Any
 
 from planqa_eval.schema import Issue
 
-# No real review-agent output sample exists yet (see docs/adr/0001-review-agent-output-contract.md).
-# We assume the agent emits a JSON array (optionally wrapped in {"issues": [...]}) of objects
-# using the common schema's own field names directly. If the real format differs, only the
-# field lookups below need to change — every other module consumes Issue objects, not raw JSON.
+# Confirmed against a real sample (2026-08-05, see docs/adr/0001-review-agent-output-contract.md):
+# a JSON array (optionally wrapped in {"issues": [...]}) using the common schema's own field
+# names directly, plus original_text/rationale/fix_direction — the same extra fields the golden/
+# review-sheet parsers populate, which Judge relies on for fix_direction in particular.
+
+
+def _optional_str(item: dict[str, Any], key: str) -> str | None:
+    value = item.get(key)
+    return str(value).strip() if value else None
 
 
 def parse_review_output(json_path: Path) -> list[Issue]:
@@ -25,7 +30,10 @@ def parse_review_output(json_path: Path) -> list[Issue]:
             description=str(item.get("description") or "").strip(),
             exception_ref=item.get("exception_ref"),
             source="review_agent",
-            issue_id=str(item["issue_id"]).strip() if item.get("issue_id") else None,
+            issue_id=_optional_str(item, "issue_id"),
+            original_text=_optional_str(item, "original_text"),
+            rationale=_optional_str(item, "rationale"),
+            fix_direction=_optional_str(item, "fix_direction"),
         )
         for item in items
     ]
