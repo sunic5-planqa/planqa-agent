@@ -332,3 +332,67 @@
 - Re-run the 10-document batch once the rulebook update is accounted for in `tiers.py` —
   the earlier batch's results were produced against the old 40-rule rulebook and are now
   stale relative to the current spec.
+
+## 2026-08-06 — Switched to team's frozen data as the single source of truth
+
+### Done
+
+- Team decided this repo's `eval-agent/` (not something we own — never modify that branch)
+  should no longer be treated as the data source either; the user's own "frozen" copies are
+  now canonical. Confirmed `Rulebook Simple V1.0 frozen.md` is byte-identical to what was
+  already pulled from eval-agent (no functional change), but replaced it anyway so
+  provenance points at the frozen file directly rather than eval-agent's copy.
+- Replaced `data/qa_dataset/` with `QA Dataset frozen.xlsx` (same "golden dataset" sheet
+  content as eval-agent's `qa_dataset_2026-08-05.xlsx`, confirmed via row-by-row diff — but
+  `Review3`/`Review4` have ~29-30 more rows each that eval-agent's copy didn't: a genuine
+  **exception/false-positive example set** ("예외조건 data" marker row in Review4), 58 rows
+  across 26 distinct rule IDs, each with 원문(text that superficially looks like a
+  violation) + 근거(why it's actually excused). This is exactly the negative-example gap
+  identified on 2026-08-05 — previously the only known negative examples were DOC-008
+  (whole-document, 0 golden rows, explicitly labeled "False Positive 테스트" in the
+  `Documents` sheet) and the DOC-006 AE-01 §3 counter-example.
+- Replaced `data/source_documents/` (41 files: DOC-001–040 + a DOC000 placeholder docx)
+  with the team's own raw-document folder, and added the mentor-facing answer key
+  (`[멘토용]_오류_정답지.md`) to `data/qa_dataset/`. **Did not read the content of any
+  document during this copy** — per explicit instruction, since these documents are the
+  blind evaluation set and reading them while doing pipeline/prompt engineering would be
+  leakage. Copied via filesystem operations only (`cp`/`Copy-Item`), never via the Read
+  tool. Hit a real gotcha copying `[멘토용]_오류_정답지.md`: PowerShell's `Copy-Item -Path`
+  interpreted the literal `[...]` in the filename as a wildcard character-class pattern
+  (matching nothing, failing silently with no error) — fixed with `-LiteralPath`.
+- Scoping decision (user's call, agreed): recall/precision/time/token measurement will use
+  only DOC-001–020 (the real NxEF product docs) for now. DOC-021–040 are teammate-generated
+  (mostly AI-generated) documents built specifically to backfill example coverage for
+  under-represented rules — deliberately synthetic/wrong, not representative real-world
+  documents, so they're set aside from general evaluation and saved for a later rule-
+  coverage-gap-filling pass instead. Checked golden dataset's real split: DOC-001–020
+  (excl. the unusable DOC-000 placeholder rows) = 19 rows/18 docs; DOC-021–040 = 36 rows/20
+  docs — confirmed DOC-000 itself (76 of 131 total golden rows!) was never usable anyway,
+  regardless of this scoping choice, since it has no real source document.
+- Corrected an earlier miscategorization: proposals 6 (Generator-Critic) and 7 (Chain-of-
+  Verification) are pipeline-*structure* options, not few-shot-*delivery* mechanisms —
+  structure options are now: 셀1-4 (2×2 of 방안1/2 × 1안/2안) + 제안5 (deterministic
+  tier×category parallel, no tool-calling) + 제안6 + 제안7. Few-shot delivery options
+  (orthogonal, layer onto any structure): 제안8 (retrieval-based dynamic few-shot), 제안9
+  (static per-rule bank + prompt caching), 제안10 (explicit violation:exception ratio —
+  now buildable using the 58-row exception set above).
+- Agreed experiment order: **구조 → 퓨샷 → 모델** (structure first since it's the most
+  expensive to change/redo, few-shot second since it's cheap prompt-only iteration on a
+  fixed structure, model swap last since it needs new client code) — reasoning validated
+  independently, not just deferring to the user. Caveat flagged: model choice and few-shot
+  design interact (weaker models lean more on examples), so plan to re-check the few-shot
+  ratio specifically against whichever model wins the final model-ablation step, rather
+  than assuming the recipe tuned on the first model transfers cleanly.
+
+### Next
+
+- Build the ablation infrastructure discussed: finer (tier, category) call granularity so
+  time/tokens are attributable per rule/category (not just per tier), a review-agent-owned
+  deterministic scorer against the frozen golden dataset (no LLM matching needed for a
+  small fixed benchmark), a small experiment runner to sweep (structure × few-shot × model)
+  combinations over a fixed DOC-001–020 benchmark subset, temperature/seed control for
+  reproducibility, and at least one non-Gemini model client (OpenAI or Claude) for a
+  meaningful model-family ablation axis.
+- Pick the DOC-001–020 ablation benchmark subset (something like the 5-8 already-tested
+  docs + DOC-008 for the false-positive check).
+- Start executing: 구조 실험(제안5 vs 6 vs 7 등) 먼저.
