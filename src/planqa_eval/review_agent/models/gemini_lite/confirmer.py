@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from planqa_eval.llm.base import LLMClient
 from planqa_eval.review_agent.document import Chunk
-from planqa_eval.review_agent.screener import ScreenCandidate
+from planqa_eval.review_agent.models.gemini_lite.screener import ScreenCandidate
 from planqa_eval.rulebook import RuleBook, RuleDef
 from planqa_eval.schema import Issue, Level
 from planqa_eval.verifier import has_valid_reference_exception

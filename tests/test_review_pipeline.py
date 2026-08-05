@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from conftest import ScriptedLLM
 
+from planqa_eval.review_agent.models import gemini_lite
 from planqa_eval.review_agent.pipeline import review_document
 from planqa_eval.rulebook import parse_rulebook
 
@@ -44,7 +45,7 @@ def test_review_document_end_to_end(rulebook_path):
         ]
     )
 
-    result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
+    result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm, gemini_lite)
 
     assert result.global_context == "이 문서는 홈 화면의 목적을 설명한다."
     assert len(screen_llm.calls) == 4
@@ -91,7 +92,7 @@ def test_review_document_dedupes_across_tiers(rulebook_path):
         ]
     )
 
-    result = review_document("DOC-TEST", _DOC_WITH_SUBSECTION, rulebook, screen_llm, confirm_llm)
+    result = review_document("DOC-TEST", _DOC_WITH_SUBSECTION, rulebook, screen_llm, confirm_llm, gemini_lite)
     assert len(result.issues) == 1
     assert result.issues[0].level == "Paragraph"
     assert result.issues[0].location == "1. 목적 > a. 배경"

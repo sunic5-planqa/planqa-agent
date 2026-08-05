@@ -202,3 +202,50 @@
   haven't been compared against the golden dataset's DOC-001 rows).
 - Consider pinning known-good model aliases as the CLI's defaults instead of leaving
   `--screen-model`/`--verify-model` required knowledge every time the Gemini lineup shifts.
+
+## 2026-08-05 (later) — Model-profile restructure + team/branch alignment
+
+### Done
+
+- Team decision: this repo now permanently hosts both the eval agent and the review agent
+  (no longer "eval agent evaluates a separate not-yet-built project") — a different repo
+  will own frontend/backend integration. Branch roles clarified: `main` = production,
+  `dev` = shared test branch, `feature/eval-agent`/`feature/review-agent` = individual dev
+  branches per owner. User owns the review agent going forward and wants to run experiments
+  across several models.
+- `git fetch` surfaced a real branch-name collision: `origin/feature/review-agent` already
+  existed (pushed by the user from elsewhere), diverged from `main`'s initial commit rather
+  than from `feature/eval-agent`, containing only a scaffolding commit (`CLAUDE.md` +
+  `.gitignore` + `docs/adr/.gitkeep` + empty `docs/progress.md`). Diffed the two `CLAUDE.md`
+  files byte-for-byte (line-ending-normalized) — the only real difference was the title
+  (`PlanQA Eval Agent` vs `PlanQA Review Agent`); everything else (code style, commit
+  template, progress log convention, ADR template) was identical. Resolved by retitling this
+  repo's `CLAUDE.md` to `PlanQA — Review & Eval Agents` rather than merging branches — no
+  push done, per explicit instruction not to push/PR until asked.
+- Restructured `review_agent/` so the model-facing prompt/logic (Global Context extraction,
+  screening, confirming) is swappable per "model profile", not hardcoded:
+  `context.py`/`screener.py`/`confirmer.py` moved to
+  `review_agent/models/gemini_lite/{context,screener,confirmer}.py` (git-mv'd to keep
+  history), re-exported from `models/gemini_lite/__init__.py`. `models/__init__.py` holds a
+  `PROFILES` registry + `DEFAULT_PROFILE`. `pipeline.review_document` now takes a `profile`
+  (any module exposing `extract_global_context`/`screen_tier`/`confirm_candidates` with the
+  same signatures) instead of importing those three functions directly — `document.py`,
+  `tiers.py`, `dedupe.py`, `diff_report.py` are untouched (model-agnostic). `cli.py` gained
+  `--profile` (default `gemini_lite`, choices from the registry).
+  To add a new model experiment: copy `models/gemini_lite/` to `models/<name>/`, rewrite
+  prompts/parsing/batching freely (or reuse individual functions from another profile), add
+  one line to `PROFILES`.
+- Updated all affected imports (`tests/test_review_screener.py`,
+  `tests/test_review_confirmer.py`, `tests/test_review_pipeline.py`) and doc links in
+  `docs/review_agent_architecture.md` (added a "모델 프로필" section explaining the contract
+  and how to add a profile; fixed the CLI example's stale model names to the ones actually
+  validated live). Full suite still green (80 passed) after the move.
+
+### Next
+
+- Decide what to do with `origin/feature/review-agent` once ready to push (force-push to
+  replace it, since the only real content — CLAUDE.md's title — is already folded in and
+  nothing else on that branch is real work).
+- Sync the 1 commit `origin/feature/eval-agent` gained (`fix: default Ollama backend to the
+  tested qwen2.5:1.5b model`) into this branch when convenient — small, unrelated diff.
+- First real second model profile, once the user picks which model to try next.

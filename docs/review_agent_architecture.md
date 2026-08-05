@@ -39,7 +39,7 @@ flowchart TD
     F --> G["6. diff 리포트\nreview.json + review.md"]
 ```
 
-### 1. Global Context Extraction — [`context.py`](../src/planqa_eval/review_agent/context.py)
+### 1. Global Context Extraction — [`context.py`](../src/planqa_eval/review_agent/models/gemini_lite/context.py)
 
 문서 전체를 정밀 모델에 1번 보내 목적·핵심 정책을 압축 요약한다. 이 요약은 이후 모든
 스크리닝/정밀판정 프롬프트 앞에 붙는다 — 매 호출마다 문서 전체를 다시 첨부하지 않아도 GA(상위
@@ -78,7 +78,7 @@ flowchart TD
 5행(1차~5차)이 서로 안 맞는 초안 상태라 — 파서를 정교하게 짜는 비용 대비 이득이 낮다고 판단했다.
 `rulebook_v1.0.md` §2가 바뀌면 `tiers.py`의 `TIER_CATEGORIES`를 같이 갱신해야 한다.
 
-### 4. 위계별 2단계 검토 — [`screener.py`](../src/planqa_eval/review_agent/screener.py) / [`confirmer.py`](../src/planqa_eval/review_agent/confirmer.py)
+### 4. 위계별 2단계 검토 — [`screener.py`](../src/planqa_eval/review_agent/models/gemini_lite/screener.py) / [`confirmer.py`](../src/planqa_eval/review_agent/models/gemini_lite/confirmer.py)
 
 위계마다 **스크리닝 1회 배치 호출 → 정밀판정 1회 배치 호출**을 수행한다. `matcher.py`/
 `judge.py`가 이미 쓰고 있는 "인덱스 태그 배치 + 배치 응답에서 인덱스가 빠지면 조용히 스킵"
@@ -119,6 +119,52 @@ flowchart TD
   렌더링한다. GitHub/VSCode 마크다운 미리보기가 이 펜스를 자동으로 빨강/초록으로 칠해준다 —
   "diff 방식으로 노출"이라는 요구사항을 그대로 만족.
 
+## 모델 프로필 — 여러 모델을 실험하기 위한 구조
+
+1/4단계(Global Context, 스크리닝, 정밀판정)는 실제 프롬프트와 파싱 로직을 담고 있고, 모델마다
+잘 먹히는 프롬프트/배치 방식/파싱 방식이 다를 수 있다. 그래서 이 세 단계를
+`review_agent/models/<프로필 이름>/`으로 분리했다 — `pipeline.py`/`document.py`/`tiers.py`/
+`dedupe.py`/`diff_report.py`/`cli.py`는 모델과 무관하게 고정이고, 실제로 LLM에 뭘 어떻게
+물어보는지만 프로필 단위로 갈아끼운다.
+
+```
+review_agent/
+  models/
+    __init__.py          # PROFILES = {"gemini_lite": gemini_lite, ...} 레지스트리
+    gemini_lite/          # 지금까지 실제 라이브 검증까지 끝난 baseline
+      __init__.py           # extract_global_context / screen_tier / confirm_candidates 재노출
+      context.py
+      screener.py
+      confirmer.py
+  document.py / tiers.py / dedupe.py / diff_report.py   # 모델 무관, 그대로
+  pipeline.py             # profile(모듈)을 인자로 받아 위 3개 함수를 호출
+  cli.py                  # --profile 플래그로 선택 (기본값: gemini_lite)
+```
+
+**프로필 계약**: `models/<name>/`은 아래 세 함수를 (같은 시그니처로) 노출하기만 하면 된다.
+나머지는 완전히 자유 — 프롬프트를 통째로 새로 쓰든, 배치 크기를 다르게 하든, JSON 파싱을
+다르게 하든 상관없다.
+
+```python
+extract_global_context(document_text: str, llm: LLMClient) -> str
+screen_tier(chunks, rulebook, level, global_context, llm) -> list[ScreenCandidate]
+confirm_candidates(candidates, chunks, rulebook, doc_id, level, global_context, source_text, llm) -> list[Issue]
+```
+
+**새 모델 추가하는 법**: `models/gemini_lite/`를 복사해서 `models/<새이름>/`로 만들고
+프롬프트/로직을 원하는 대로 고친 뒤, `models/__init__.py`의 `PROFILES` 딕셔너리에 한 줄
+등록하면 `--profile <새이름>`으로 바로 쓸 수 있다. 한 단계만 바꾸고 싶으면(예: confirm 프롬프트만
+다르게) 나머지 함수는 다른 프로필에서 그대로 import해서 재사용해도 된다.
+
+```bash
+uv run planqa-review review --input <파일> --profile gemini_lite ...   # 기본값
+uv run planqa-review review --input <파일> --profile qwen_local ...    # 예시: 새로 추가한 프로필
+```
+
+`--profile`은 "어떤 프롬프트/로직을 쓸지"이고, `--backend`/`--screen-model`/`--verify-model`은
+"어떤 LLM을 호출할지"라 서로 독립적이다 — 같은 프로필로 모델만 바꿔보거나, 같은 모델로 프로필만
+바꿔보는 것 둘 다 가능하다.
+
 ## 재사용한 기존 코드
 
 | 무엇 | 어디서 | 왜 |
@@ -135,9 +181,14 @@ flowchart TD
 uv run planqa-review review \
   --input data/source_documents/DOC-001_홈화면_PRD_v1.0.md \
   --doc-id DOC-001 \
-  --backend gemini --screen-model gemini-2.5-flash-lite --verify-model gemini-2.5-pro
+  --backend gemini --screen-model gemini-flash-lite-latest --verify-model gemini-3.5-flash-lite
 # → outputs/review/<timestamp>/review.json, review.md
 ```
+
+Gemini 모델명은 자주 바뀐다 — 실제로 이 문서 초안에 적었던 `gemini-2.5-pro`/`gemini-2.5-flash`는
+2026-08-05 라이브 실행 시점에 이미 이 무료 티어 키에서 막혀 있었다(할당량 0 또는 신규 사용자
+지원 종료). 커맨드가 안 되면 모델명부터 의심하고, `client.models.list()`로 그 키가 실제로 쓸
+수 있는 모델 목록을 먼저 확인할 것.
 
 `--backend`/`--screen-model`/`--verify-model`을 생략하면 기존 평가 에이전트와 동일하게
 `PLANQA_LLM_BACKEND`(기본 gemini) 환경변수와 백엔드 기본 모델을 쓴다. 스크리닝과 정밀판정은

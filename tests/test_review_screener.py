@@ -3,7 +3,7 @@ from __future__ import annotations
 from conftest import ScriptedLLM
 
 from planqa_eval.review_agent.document import Chunk
-from planqa_eval.review_agent.screener import rules_for_tier, screen_tier
+from planqa_eval.review_agent.models.gemini_lite.screener import rules_for_tier, screen_tier
 from planqa_eval.rulebook import parse_rulebook
 from planqa_eval.schema import Level
 

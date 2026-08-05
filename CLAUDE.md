@@ -1,4 +1,4 @@
-# PlanQA Eval Agent
+# PlanQA — Review & Eval Agents
 
 # Workflow
 
