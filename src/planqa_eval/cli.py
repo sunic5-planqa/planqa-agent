@@ -21,7 +21,7 @@ from planqa_eval.parsers.review_json import parse_review_output
 from planqa_eval.reporter import write_report
 from planqa_eval.rulebook import parse_rulebook
 
-DEFAULT_XLSX = Path("data/qa_dataset/qa_dataset_2026-08-02.xlsx")
+DEFAULT_XLSX = Path("data/qa_dataset/qa_dataset_2026-08-05.xlsx")
 DEFAULT_RULEBOOK = Path("data/rulebook/rulebook_v1.0.md")
 DEFAULT_SOURCE_DIR = Path("data/source_documents")
 

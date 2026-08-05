@@ -5,12 +5,14 @@ PlanQA 프로젝트의 **평가 에이전트** — 룰북 기반 기획서 품�
 
 ## 데이터
 
-- `data/rulebook/` — 검토 룰북 (8개 카테고리, 42개 룰, 문서 위계·예외조건 정의)
-- `data/qa_dataset/` — golden dataset(현재 17문서/19건, 계속 늘어남) + Documents 마스터 + 사람
-  리뷰어 6명(Review1-6, 현재 1-4만 작성됨) 시트
-- `data/source_documents/` — golden dataset이 참조하는 원문 기획서 20건
-- `data/sample_review_output.json` — 검토 에이전트가 아직 없어서 golden dataset을 바탕으로 만든
-  예시 출력(일부러 miss·레벨오분류·신규이슈를 섞어 넣음). 실제 에이전트 출력이 생기면 대체됩니다.
+- `data/rulebook/` — 검토 룰북 (8개 카테고리, 41개 룰, 문서 위계·예외조건 정의)
+- `data/qa_dataset/` — golden dataset(현재 38문서/131건, 계속 늘어남) + Documents 마스터(41개) +
+  사람 리뷰어 6명(Review1-6, 현재 1-4만 작성됨) 시트
+- `data/source_documents/` — golden dataset이 참조하는 원문 기획서 40건 (DOC-000은 원본이 빈
+  파일이라 없음 — `docs/progress.md` 2026-08-05 항목 참고)
+- `data/sample_review_output.json` — **19건짜리 구 golden dataset 기준으로 만든 예시라 지금은
+  낡음.** 검토 에이전트 실제 출력이 없는 동안 파이프라인 배선을 확인하는 용도로만 쓰세요 (recall/
+  precision 수치는 참고하지 마세요).
 
 ## 설치
 

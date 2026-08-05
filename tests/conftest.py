@@ -12,7 +12,7 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 @pytest.fixture
 def xlsx_path() -> Path:
-    return DATA_DIR / "qa_dataset" / "qa_dataset_2026-08-02.xlsx"
+    return DATA_DIR / "qa_dataset" / "qa_dataset_2026-08-05.xlsx"
 
 
 @pytest.fixture

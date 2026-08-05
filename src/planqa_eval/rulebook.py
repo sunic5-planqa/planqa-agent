@@ -37,6 +37,30 @@ class RuleBook:
         return rule.category if rule else None
 
 
+def _repair_wrapped_table_rows(text: str) -> str:
+    """A table cell occasionally contains a literal newline (e.g. a pasted multi-line
+    exception note), which breaks a per-line row match. Any line that opens a table row
+    ("| ...") but doesn't close it ("... |") is still open — merge forward until a line
+    closes it, so the whole row lands on one line before _TABLE_ROW runs."""
+    repaired: list[str] = []
+    buffer: str | None = None
+    for line in text.split("\n"):
+        if buffer is not None:
+            buffer = f"{buffer} {line.strip()}"
+            if buffer.rstrip().endswith("|"):
+                repaired.append(buffer)
+                buffer = None
+            continue
+        stripped = line.strip()
+        if stripped.startswith("|") and not stripped.endswith("|"):
+            buffer = stripped
+        else:
+            repaired.append(line)
+    if buffer is not None:
+        repaired.append(buffer)
+    return "\n".join(repaired)
+
+
 def _parse_row(rule_id: str, cells_raw: str, category: str, category_label: str) -> RuleDef:
     cells = [c.strip() for c in cells_raw.split("|")]
     if len(cells) == 3:
@@ -56,7 +80,7 @@ def _parse_row(rule_id: str, cells_raw: str, category: str, category_label: str)
 
 
 def parse_rulebook(path: Path) -> RuleBook:
-    text = path.read_text(encoding="utf-8")
+    text = _repair_wrapped_table_rows(path.read_text(encoding="utf-8"))
 
     # The file ends with an authoring-progress tracking table ("Rule ID | 채워야 할 개수 |
     # 담당자") that reuses every Rule ID from the catalog above it — parsing it as rule rows

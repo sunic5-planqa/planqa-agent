@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from planqa_eval.rulebook import parse_rulebook
-from planqa_eval.schema import Level
 
 
 def test_parses_all_eight_categories(rulebook_path):
@@ -11,7 +10,7 @@ def test_parses_all_eight_categories(rulebook_path):
 
 def test_reference_exception_rules_match_section_3(rulebook_path):
     rb = parse_rulebook(rulebook_path)
-    assert rb.reference_exception_rule_ids == {"LG-04", "TC-02", "AE-01", "GA-03"}
+    assert rb.reference_exception_rule_ids == {"LG-03", "TC-02", "AE-01", "GA-03"}
 
 
 def test_rule_fields_parsed(rulebook_path):
@@ -26,13 +25,25 @@ def test_rule_fields_parsed(rulebook_path):
 
 def test_dash_exception_becomes_none(rulebook_path):
     rb = parse_rulebook(rulebook_path)
-    assert rb.rule("LG-03").exception_text is None
+    assert rb.rule("RD-02").exception_text is None
 
 
-def test_rd_ga_rules_have_fixed_level(rulebook_path):
+def test_no_rule_has_a_fixed_level_in_the_current_rulebook(rulebook_path):
+    # v1.0 (2026-08-05 revision) dropped the per-rule "위계" column RD/GA used to have —
+    # this asserts the current reality rather than the old format, so a future rulebook
+    # revision that reintroduces per-rule levels will fail this test loudly.
     rb = parse_rulebook(rulebook_path)
-    assert rb.rule("RD-01").fixed_level == Level.PARAGRAPH
-    assert rb.rule("GA-03").fixed_level == Level.DOCUMENT
+    assert all(rule.fixed_level is None for rule in rb.rules.values())
+
+
+def test_wrapped_table_cell_is_repaired_not_dropped(rulebook_path):
+    # RD-01's exception text contains a literal embedded blank line in the source file,
+    # which used to make the whole row fail to match and silently disappear.
+    rb = parse_rulebook(rulebook_path)
+    rd_01 = rb.rule("RD-01")
+    assert rd_01 is not None
+    assert rd_01.exception_text is not None
+    assert "재사용하는 경우 예외" in rd_01.exception_text
 
 
 def test_authoring_progress_table_does_not_pollute_rule_definitions(rulebook_path):

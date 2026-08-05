@@ -129,3 +129,59 @@
 - If Qwen is ever considered for real (non-testing) use, the DOC-006-style ambiguous-match
   weakness found here means it should not be trusted without first passing the 2-1 gate on a
   stratified sample that includes multi-issue-per-location cases like this one.
+
+## 2026-08-05 — Confirmed data refresh (rulebook revision + expanded golden set)
+
+Team confirmed the data in `~/Downloads/SuniC 10팀/` as the new source of truth, replacing the
+2026-08-02 snapshot.
+
+### Done
+
+- **Rulebook**: 40→41 rules. Notable content changes: exception-target rule set moved from
+  `{LG-04, TC-02, AE-01, GA-03}` to `{LG-03, TC-02, AE-01, GA-03}` (LG rules renumbered/merged);
+  review calls went from 3 to 4 (문단 위계 gets its own call now); RD/GA tables dropped their
+  per-rule fixed "위계" column entirely. None of this needed a code change beyond one parser fix
+  below — confirms the "derive everything from the file, never hardcode" design held up under a
+  real revision, not just a hypothetical one.
+- **Golden dataset**: replaced `qa_dataset_2026-08-02.xlsx` with `qa_dataset_2026-08-05.xlsx`
+  (19→131 issues, 17→38 unique documents of 41 total; Review1-4 also grew 28/28/49/73→
+  56/59/79/73; Review5/6 still empty). Updated `cli.py`'s `DEFAULT_XLSX` and the test fixture to
+  match.
+- **Source documents**: added DOC-021 through DOC-040 (20 new files; three of them — DOC-036/
+  037/038/039/040 — were `.txt` in the source drop, normalized to `.md` for consistency).
+  DOC-001 through DOC-020 content is byte-identical to what we already had, confirmed by diff
+  before touching anything.
+- **Parser bug found and fixed**: `RD-01`'s exception text in the new rulebook contains a literal
+  embedded blank line (a Notion paste artifact), which broke `rulebook.py`'s one-row-per-line
+  assumption and silently dropped the rule entirely (`rulebook.rule("RD-01")` returned `None`).
+  Added `_repair_wrapped_table_rows()`: merges a table line that opens with `|` but doesn't
+  close with `|` forward into subsequent lines until one does, before row-matching runs. Verified
+  it doesn't false-positive on adjacent non-table content (e.g. the new "TC 내부 규칙" bullet
+  right after the TC table). Regression test added.
+- Updated `tests/test_rulebook.py`'s three assertions that were pinned to old-rulebook specifics
+  (old exception-rule set, a specific rule's exact "-"-exception, and RD/GA fixed levels — the
+  latter rewritten to assert *no* rule has a fixed level now, since that column is gone) — these
+  were fixture-accuracy failures, not regressions; the parser was already reading the new file
+  correctly except for the RD-01 bug above.
+- All 47 tests pass against the new fixtures.
+
+### Known gap
+
+- **DOC-000 has no usable source text.** `01_Raw_Documents/DOC000_제목.docx` — the only file for
+  it — is a genuinely empty Word document (confirmed by inspecting `word/document.xml` directly:
+  one empty paragraph, no body text). DOC-000 accounts for **76 of 131 golden issues (58%)**, so
+  this is a real gap, not a rounding error. `load_source_text()` already returns `None`
+  gracefully for it (no crash; `has_valid_reference_exception()` correctly treats missing source
+  as "not excused" rather than guessing) but any DOC-000 exception-condition check is running
+  without real document context until the actual source text is found.
+- Explicitly did **not** pull in `01_Raw_Documents/보미_raw_datasets/` or `승현_raw_datasets/` —
+  both reuse the DOC-001..012/030-043 ID range for entirely different documents than the main
+  set, and the current golden dataset's doc_ids don't reference them. Revisit if the golden
+  dataset ever expands to cite those IDs.
+
+### Next
+
+- Find DOC-000's real source text (ask the team where the original — probably 은성's practice
+  document referenced by the `DOC-000-ES-*` issue IDs in Review1 — actually lives) and add it to
+  `data/source_documents/`.
+- Real review-agent output JSON sample — still the biggest open item, unchanged from before.
