@@ -62,6 +62,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    # Windows consoles often default stdout to a non-UTF-8 codepage (e.g. cp949 under a
+    # Korean locale), which can't encode characters like an em dash — reconfigure so the
+    # Korean-heavy CLI output here doesn't crash after a review has already completed.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     load_dotenv()
     parser = build_parser()
     args = parser.parse_args(argv)

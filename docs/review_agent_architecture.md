@@ -149,9 +149,20 @@ Gemini처럼 백엔드 자체를 다르게 가져갈 수도 있다(`llm/factory.
 - 신규 모듈 전부 `ScriptedLLM`으로 단위/엔드투엔드 테스트 작성 — 네트워크·API 키 없이
   `uv run pytest`로 검증 가능 (`tests/test_review_*.py`, 이 세션에서 80개 전체 통과 확인).
 - `document.py`는 실제 `DOC-001` 원문으로도 위계 분할을 검증했다.
-- **실제 LLM(Gemini/Ollama)으로의 라이브 실행은 이 세션에서 하지 못했다** — 이 저장소의
-  기존 `docs/progress.md`에도 같은 제약이 기록돼 있듯, 이 환경에는 `GEMINI_API_KEY`/Ollama가
-  없다. `.env`를 채운 뒤 위 CLI 커맨드를 직접 돌려보는 것이 다음 단계다.
+- **실제 Gemini API로 `DOC-001`을 라이브 검토 완료** (2026-08-05) — 6건 지적(모호한 표현
+  AE-03 5건, 약어 미정의 TC-02 1건), 전부 원문 인용/근거/개선안이 채워진 diff로 출력됨.
+  `outputs/review/20260805T090623Z/`에 실제 출력 예시가 남아있다. 이 실행에서 두 가지를
+  발견/수정했다:
+  - **모델 이름이 문서 작성 시점과 달라져 있었다** — `gemini-2.5-pro`는 이 무료 티어 키에서
+    할당량 0, `gemini-2.5-flash`는 "신규 사용자에게 더 이상 제공 안 됨"(404)이었다. 실제로
+    동작한 건 `gemini-flash-lite-latest`/`gemini-3.1-flash-lite`/`gemini-3.5-flash-lite`
+    같은 `-latest`/`-lite` 계열이었다 — **CLI 예시의 모델명은 시점에 따라 깨질 수 있으니,
+    `--screen-model`/`--verify-model`을 안 주면 실패하는 조합부터 의심하고
+    `client.models.list()`로 그 키가 실제로 뭘 쓸 수 있는지 먼저 확인할 것.**
+  - `cli.py`의 완료 메시지 `print()`에 em dash(`—`)가 들어 있어 Windows 콘솔이 cp949
+    코드페이지일 때 `UnicodeEncodeError`로 죽었다 (검토 자체는 끝나고 파일도 다 쓴 뒤 마지막
+    출력 한 줄에서만 발생). `main()` 시작에 `sys.stdout.reconfigure(encoding="utf-8")`을
+    추가해 수정.
 
 ## 알려진 제약 / 확장 포인트
 

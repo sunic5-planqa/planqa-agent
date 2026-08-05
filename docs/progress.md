@@ -162,3 +162,43 @@
 - Decide the Document-tier vs finer-tier dedupe gap (see architecture doc) once a real
   overlapping case shows up.
 - Word-tier review, once rulebook §2 actually assigns categories/input unit to it.
+
+## 2026-08-05 — First live run against real Gemini, one bug fixed
+
+### Done
+
+- Ran `planqa-review review` against the real `DOC-001_홈화면_PRD_v1.0.md` with an actual
+  `GEMINI_API_KEY` for the first time — the whole pipeline (Global Context, 4 tiers x
+  screen+confirm, dedupe, report) completed end to end. Result: 6 issues (5x AE-03 vague
+  expression, 1x TC-02 undefined abbreviation "PDP"), each with a real quoted original_text
+  and a concrete fix_direction, rendered as ```diff blocks. Output kept at
+  `outputs/review/20260805T090623Z/` as a real example (gitignored, not committed).
+- Model names in the CLI examples/docs had rotted: `gemini-2.5-pro` is quota-0 on this
+  free-tier key, `gemini-2.5-flash` 404s as "no longer available to new users". Probed
+  `client.models.list()` and found the ones this key can actually call:
+  `gemini-flash-lite-latest`, `gemini-3.1-flash-lite`, `gemini-3.5-flash-lite` all work
+  (including in JSON mode); every non-`-lite` "pro"/"flash" tier is 429 quota-exhausted.
+  Used `gemini-flash-lite-latest` (screen) + `gemini-3.5-flash-lite` (confirm) for this run.
+  Documented the "list available models before trusting any hardcoded model name" lesson in
+  `docs/review_agent_architecture.md`.
+- Fixed a real bug this run surfaced: `cli.py`'s completion `print()` has an em dash (`—`),
+  which crashed with `UnicodeEncodeError` on this Windows machine's cp949 console codepage
+  — *after* the review had already finished and both report files were written, so the
+  pipeline's actual output was fine but the CLI looked like it failed. Fixed with
+  `sys.stdout.reconfigure(encoding="utf-8")` at the top of `main()`. Re-ran the full test
+  suite after the fix (80 passed).
+
+### Notes
+
+- Environment quirk unrelated to the code: this sandbox had no `uv` and no real `python` on
+  PATH (only the Windows Store stub) — found a working interpreter at
+  `C:\Users\HYESEO\AppData\Local\Python\bin\python.exe` and built a `.venv` (gitignored) with
+  `pip install -e . pytest` to run both the test suite and the live CLI run.
+
+### Next
+
+- Now that a live run works, do a second pass reading the actual issues found against
+  DOC-001 by eye to sanity-check quality (the 6 issues above look reasonable on a skim, but
+  haven't been compared against the golden dataset's DOC-001 rows).
+- Consider pinning known-good model aliases as the CLI's defaults instead of leaving
+  `--screen-model`/`--verify-model` required knowledge every time the Gemini lineup shifts.
