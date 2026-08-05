@@ -56,9 +56,14 @@ def to_json_dict(result: ReviewResult, stats: RunStats | None = None) -> list[di
         }
         for i, issue in enumerate(result.issues)
     ]
-    if stats is None:
+    if stats is None and not result.tier_errors:
         return issues
-    return {"issues": issues, "stats": _stats_dict(stats)}
+    payload: dict[str, Any] = {"issues": issues}
+    if stats is not None:
+        payload["stats"] = _stats_dict(stats)
+    if result.tier_errors:
+        payload["tier_errors"] = list(result.tier_errors)
+    return payload
 
 
 def _diff_block(original: str | None, suggestion: str | None) -> str:
@@ -103,6 +108,10 @@ def to_markdown(result: ReviewResult, rulebook: RuleBook, stats: RunStats | None
     lines = [f"# 기획서 검토 결과 — {result.doc_id}", ""]
     if stats is not None:
         lines += _stats_markdown(stats)
+    if result.tier_errors:
+        lines += ["## ⚠️ 일부 위계 검토 실패 — 아래 결과는 부분 결과입니다", ""]
+        lines += [f"- {error}" for error in result.tier_errors]
+        lines.append("")
     if result.global_context:
         lines += ["## 문서 요약 (Global Context)", "", result.global_context, ""]
     lines += [f"## 지적 사항 ({len(result.issues)}건)", ""]

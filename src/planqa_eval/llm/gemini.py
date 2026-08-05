@@ -47,7 +47,7 @@ def _call_stats(response: Any, elapsed_seconds: float) -> CallStats:
     )
 
 
-def _retry_delay_seconds(error: genai_errors.ClientError) -> float:
+def _retry_delay_seconds(error: genai_errors.APIError) -> float:
     details = error.details if isinstance(error.details, dict) else {}
     for detail in details.get("error", {}).get("details", []):
         if detail.get("@type", "").endswith("RetryInfo"):
@@ -69,7 +69,7 @@ class GeminiClient(LLMClient):
 
     def complete_json(self, *, system: str, prompt: str) -> Any:
         start = time.perf_counter()
-        last_error: genai_errors.ClientError | None = None
+        last_error: genai_errors.APIError | None = None
         for _cycle in range(_MAX_CYCLES):
             for _ in range(len(self._clients)):
                 client = self._clients[self._current]
@@ -82,8 +82,9 @@ class GeminiClient(LLMClient):
                             response_mime_type="application/json",
                         ),
                     )
-                    # Elapsed includes any 429 backoff above — a model that gets throttled a
-                    # lot on the free tier really is slower in practice for this run.
+                    # Elapsed includes any 429/5xx backoff above — a model that gets
+                    # throttled a lot on the free tier really is slower in practice for
+                    # this run.
                     self.usage.append(_call_stats(response, time.perf_counter() - start))
                     return parse_json_response(response.text)
                 except genai_errors.ClientError as error:
@@ -91,6 +92,11 @@ class GeminiClient(LLMClient):
                         raise
                     last_error = error
                     self._current = (self._current + 1) % len(self._clients)
-            # every key hit 429 this cycle — back off before cycling through them again
+                except genai_errors.ServerError as error:
+                    # 5xx ("model overloaded") is transient and unrelated to quota — worth
+                    # retrying the same way as 429 rather than failing the whole run.
+                    last_error = error
+                    self._current = (self._current + 1) % len(self._clients)
+            # every key hit an error this cycle — back off before cycling through again
             time.sleep(_retry_delay_seconds(last_error))
         raise last_error

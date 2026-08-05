@@ -55,6 +55,8 @@ def cmd_review(args: argparse.Namespace) -> int:
     print(
         f"{doc_id}: {len(result.issues)}건 지적, {stats.total_wall_seconds:.1f}초 — {json_path}, {md_path}"
     )
+    for error in result.tier_errors:
+        print(f"  ⚠️ {error}", file=sys.stderr)
     return 0
 
 
@@ -84,11 +86,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
-    # Windows consoles often default stdout to a non-UTF-8 codepage (e.g. cp949 under a
-    # Korean locale), which can't encode characters like an em dash — reconfigure so the
-    # Korean-heavy CLI output here doesn't crash after a review has already completed.
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
+    # Windows consoles often default stdout/stderr to a non-UTF-8 codepage (e.g. cp949
+    # under a Korean locale), which can't encode characters like an em dash or ⚠️ — this CLI
+    # is Korean-heavy on both streams (stderr carries the tier-failure warnings).
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     load_dotenv()
     parser = build_parser()
     args = parser.parse_args(argv)

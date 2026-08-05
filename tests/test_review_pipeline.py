@@ -1,10 +1,30 @@
 from __future__ import annotations
 
+from typing import Any
+
 from conftest import ScriptedLLM
 
 from planqa_eval.review_agent.models import gemini_lite
 from planqa_eval.review_agent.pipeline import review_document
 from planqa_eval.rulebook import parse_rulebook
+
+
+class _FailFirstThenScripted:
+    """Simulates a backend that throws on its first call (e.g. malformed JSON, a transient
+    503) and behaves normally after — for testing that one tier's failure doesn't take down
+    the whole review."""
+
+    def __init__(self, responses: list[Any]) -> None:
+        self.model = "fake"
+        self.usage: list[Any] = []
+        self._responses = iter(responses)
+        self._call_count = 0
+
+    def complete_json(self, *, system: str, prompt: str) -> Any:
+        self._call_count += 1
+        if self._call_count == 1:
+            raise ValueError("simulated malformed JSON response")
+        return next(self._responses)
 
 _DOC = "# 샘플 PRD\n\n## 1. 목적\n\n간단한 목적 설명입니다.\n"
 _DOC_WITH_SUBSECTION = "# 샘플 PRD\n\n## 1. 목적\n\n### a. 배경\n\n간단한 목적 설명입니다.\n"
@@ -96,3 +116,20 @@ def test_review_document_dedupes_across_tiers(rulebook_path):
     assert len(result.issues) == 1
     assert result.issues[0].level == "Paragraph"
     assert result.issues[0].location == "1. 목적 > a. 배경"
+
+
+def test_review_document_isolates_a_single_tier_failure(rulebook_path):
+    rulebook = parse_rulebook(rulebook_path)
+
+    # Document tier is first in TIER_ORDER, so this is screen_llm's very first call —
+    # simulate it failing (e.g. the model returned malformed JSON) and confirm the other
+    # 3 tiers still run and their (empty) results are still returned, not lost.
+    screen_llm = _FailFirstThenScripted([{"candidates": []}, {"candidates": []}, {"candidates": []}])
+    confirm_llm = ScriptedLLM([{"summary": "요약"}])
+
+    result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm, gemini_lite)
+
+    assert result.issues == ()
+    assert len(result.tier_errors) == 1
+    assert "Document" in result.tier_errors[0]
+    assert result.global_context == "요약"  # Global Context extraction itself wasn't affected

@@ -299,3 +299,67 @@
   order) — paused on the user's "기다려", not yet run.
 - Once that's run for a first profile, feed `review.json` into
   `planqa-eval evaluate --predictions` to get the accuracy side of the comparison.
+
+## 2026-08-05 (final) — First 10-document batch, 2 reliability bugs found and fixed live
+
+### Done
+
+- User added 4 `GEMINI_API_KEYS`, but pasted them into the singular `GEMINI_API_KEY` (one
+  215-char blob) instead of the plural comma-rotated var — moved the value over in `.env`
+  without ever printing it to any tool output, confirmed 4 keys of 53 chars each parse
+  correctly.
+- Ran the planned 10-doc batch (DOC-006/007/010/016 "기본" + DOC-003/004/005/011/012/015
+  "중급", gemini_lite profile, gemini-flash-lite-latest/gemini-3.5-flash-lite) — 6/10
+  succeeded first try, 4/10 crashed the whole document's output to zero. Root-caused two
+  real bugs from the live failures rather than guessing:
+  1. `GeminiClient.complete_json` only retried `ClientError` 429 — a `ServerError` 503
+     ("model overloaded", transient) wasn't a `ClientError` at all, so it propagated
+     immediately and killed the run (DOC-006). Fixed: also catch `genai_errors.ServerError`
+     and retry it through the same key-rotation/backoff loop.
+  2. Even in JSON mode, the model sometimes returns invalid JSON ("Invalid \uXXXX escape",
+     "Expecting property name...") — DOC-007/011/016. The bigger problem wasn't the parse
+     failure itself, it was that **one tier's parse failure discarded every other
+     already-successful tier's results for that document** (`review_document` had no error
+     boundary). Fixed: `pipeline.review_document` now wraps Global Context extraction and
+     each tier's screen+confirm in its own `try/except`, recording failures into a new
+     `ReviewResult.tier_errors: tuple[str, ...]` field instead of raising — one tier failing
+     no longer loses the rest. Surfaced in `review.md` (a "⚠️ 일부 위계 검토 실패" section)
+     and `review.json` (`tier_errors` key, dict-wrapped like `stats`), plus a stderr warning
+     line from `cli.py`.
+  3. Along the way, found `cli.py`'s UTF-8 stdout reconfigure (from earlier today) didn't
+     cover stderr, so the new tier-failure warning's ⚠️ emoji printed as escaped
+     `⚠️` on this Windows cp949 console — reconfigured both streams.
+- Re-ran the 4 failed docs after the fixes: all 4 completed this time. DOC-016 still hit a
+  Sentence-tier JSON parse failure on retry, but this time correctly returned its other
+  3 tiers' 2 real issues instead of crashing — direct confirmation the fault-isolation fix
+  works as intended, not just in unit tests.
+- New test `test_review_document_isolates_a_single_tier_failure` (a fake client that throws
+  on its first call, verifying the other 3 tiers still run and the failure lands in
+  `tier_errors`). Full suite: 92 passed.
+- Full batch results (`outputs/review/batch_20260805T121340Z/`, not committed —
+  gitignored):
+
+  | doc | issues | tier failures | wall seconds | total tokens |
+  |---|---|---|---|---|
+  | DOC-006 | 9 | 0 | 121.7 | 24,910 |
+  | DOC-007 | 4 | 0 | 58.5 | 18,796 |
+  | DOC-010 | 6 | 0 | 43.4 | 16,605 |
+  | DOC-016 | 2 | 1 | 36.1 | 19,188 |
+  | DOC-003 | 2 | 0 | 14.9 | 17,204 |
+  | DOC-004 | 4 | 0 | 16.5 | 18,973 |
+  | DOC-005 | 6 | 0 | 18.2 | 17,399 |
+  | DOC-011 | 1 | 0 | 44.9 | 15,610 |
+  | DOC-012 | 2 | 0 | 25.2 | 19,565 |
+  | DOC-015 | 0 | 0 | 16.7 | 17,789 |
+  | **total** | 36 | 1 | **396.3s (~6.6min)** | **186,039** |
+
+### Next
+
+- Fix or accept DOC-016's remaining Sentence-tier JSON parse failure — could add a
+  best-effort JSON repair pass in `parse_json_response`, or just treat occasional per-tier
+  loss as an acceptable cost of the free-tier lite models and move on.
+- Compare this gemini_lite run's `36 issues / 396s / 186k tokens` baseline against a second
+  model profile once the user builds one (this was the whole point of `run_stats`).
+- Cross-check a few of these 36 issues against `[멘토용]_오류_정답지.md`'s answer key by
+  eye, and/or feed a `review.json` into `planqa-eval evaluate --predictions` once its golden
+  rows cover these particular documents.
