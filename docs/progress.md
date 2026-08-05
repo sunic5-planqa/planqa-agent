@@ -249,3 +249,53 @@
 - Sync the 1 commit `origin/feature/eval-agent` gained (`fix: default Ollama backend to the
   tested qwen2.5:1.5b model`) into this branch when convenient — small, unrelated diff.
 - First real second model profile, once the user picks which model to try next.
+
+## 2026-08-05 (later still) — Time/token usage tracking for model-comparison experiments
+
+### Done
+
+- User's plan: run the review agent across several documents/model profiles, compare
+  time/token cost (this) against accuracy (the eval agent, separately) to settle on one
+  config. That needs actual instrumentation — there wasn't any before this.
+- Confirmed via a real Gemini call that `response.usage_metadata` exposes
+  `prompt_token_count`/`candidates_token_count`/`total_token_count`; Ollama's `/api/chat`
+  exposes `prompt_eval_count`/`eval_count` the same way.
+- Added `CallStats` (elapsed_seconds + token counts) and `usage: list[CallStats]` to
+  `LLMClient` (`llm/base.py`) — purely additive, no existing call site (matcher.py,
+  judge.py, new_rule_triage.py, review_agent's screener/confirmer/context) needed to
+  change, since `complete_json`'s return contract is untouched. `GeminiClient`/
+  `OllamaClient` now append one `CallStats` per successful call; `ScriptedLLM` in
+  `tests/conftest.py` does too (zeroed) so anything reading `.usage` doesn't crash under
+  fakes. `elapsed_seconds` deliberately includes 429 retry/backoff sleep — a model that
+  gets throttled a lot on the free tier really is slower in practice for that run, so
+  stripping it out would make the time comparison misleading.
+- New `review_agent/run_stats.py`: `RunStats`/`ModelUsage` + `build_run_stats()` reading
+  `screen_llm.usage`/`confirm_llm.usage` plus wall-clock time measured around
+  `review_document()` in `cli.py`. Wired into `diff_report.py`: `review.json` becomes
+  `{"issues": [...], "stats": {...}}` when stats are passed (the ADR-0001 parser already
+  accepts that dict-wrapped shape, so `planqa-eval evaluate` compatibility isn't broken;
+  `to_json_dict`/`to_markdown`/`write_report` all keep working with no `stats` arg for
+  existing callers/tests). `review.md` gets a "## 실행 통계" section up top. Recorded
+  `profile`/`screen_model`/`verify_model` in the stats too, since the output directory's
+  timestamp alone doesn't say which config produced it — closes the gap noted in the
+  2026-08-05 (earlier) entry.
+- Live-verified end to end (`outputs/review/stats_smoketest/`, DOC-001, gemini_lite
+  profile): 17.3s wall time, screening 4 calls/7.0s/10,216 tokens, confirm 4 calls
+  (includes Global Context)/10.3s/6,927 tokens — both files show the numbers correctly.
+- Answered the multi-API-key question: yes, worth doing, and `GEMINI_API_KEYS` (comma-
+  separated, round-robins on 429) already existed in `llm/gemini.py` from the eval-agent's
+  earlier work — no new code needed there. Explained that separate quota needs separate
+  AI Studio *projects*, not just new keys in the same project, and that avoiding 429s
+  during a timed comparison run matters as much as raising total quota (backoff sleep
+  would otherwise inflate that run's measured time for reasons unrelated to the model).
+- New tests: `tests/test_llm_base.py` (pure `CallStats` aggregation), `tests/test_run_stats.py`
+  (`build_run_stats` against a local fake `LLMClient`), plus stats-path cases added to
+  `tests/test_review_diff_report.py`. Full suite: 91 passed.
+
+### Next
+
+- The actual 10-document comparison run the user planned (DOC-006/007/010/016 "기본" +
+  DOC-003/004/005/011/012/015 "중급", per `[멘토용]_오류_정답지.md`'s recommended test
+  order) — paused on the user's "기다려", not yet run.
+- Once that's run for a first profile, feed `review.json` into
+  `planqa-eval evaluate --predictions` to get the accuracy side of the comparison.

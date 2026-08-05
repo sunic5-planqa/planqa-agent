@@ -4,8 +4,21 @@ import json
 
 from planqa_eval.review_agent.diff_report import to_json_dict, to_markdown, write_report
 from planqa_eval.review_agent.pipeline import ReviewResult
+from planqa_eval.review_agent.run_stats import ModelUsage, RunStats
 from planqa_eval.rulebook import RuleBook, parse_rulebook
 from planqa_eval.schema import Issue
+
+
+def _stats() -> RunStats:
+    return RunStats(
+        profile="gemini_lite",
+        backend="gemini",
+        screen_model="gemini-flash-lite-latest",
+        verify_model="gemini-3.5-flash-lite",
+        total_wall_seconds=12.34,
+        screen=ModelUsage(call_count=4, elapsed_seconds=5.0, total_tokens=1000),
+        confirm=ModelUsage(call_count=2, elapsed_seconds=7.34, total_tokens=None),
+    )
 
 
 def _issue(**overrides) -> Issue:
@@ -60,3 +73,36 @@ def test_write_report_writes_both_files(tmp_path, rulebook_path):
     assert json_path.exists() and md_path.exists()
     data = json.loads(json_path.read_text(encoding="utf-8"))
     assert data[0]["rule_id"] == "MI-01"
+
+
+def test_to_json_dict_without_stats_stays_a_bare_list():
+    result = ReviewResult(doc_id="DOC-TEST", global_context="", issues=(_issue(),))
+    assert isinstance(to_json_dict(result), list)
+
+
+def test_to_json_dict_with_stats_wraps_issues_and_adds_stats():
+    result = ReviewResult(doc_id="DOC-TEST", global_context="", issues=(_issue(),))
+    data = to_json_dict(result, _stats())
+    assert isinstance(data, dict)
+    assert data["issues"][0]["rule_id"] == "MI-01"
+    assert data["stats"]["profile"] == "gemini_lite"
+    assert data["stats"]["screen"]["call_count"] == 4
+    assert data["stats"]["confirm"]["total_tokens"] is None
+
+
+def test_to_markdown_with_stats_includes_stats_section(rulebook_path):
+    rulebook = parse_rulebook(rulebook_path)
+    result = ReviewResult(doc_id="DOC-TEST", global_context="", issues=())
+    markdown = to_markdown(result, rulebook, _stats())
+    assert "## 실행 통계" in markdown
+    assert "gemini_lite" in markdown
+    assert "12.3초" in markdown
+
+
+def test_write_report_with_stats_round_trips_through_json(tmp_path, rulebook_path):
+    rulebook = parse_rulebook(rulebook_path)
+    result = ReviewResult(doc_id="DOC-TEST", global_context="", issues=(_issue(),))
+    json_path, md_path = write_report(tmp_path / "out", result, rulebook, _stats())
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    assert data["stats"]["backend"] == "gemini"
+    assert "## 실행 통계" in md_path.read_text(encoding="utf-8")

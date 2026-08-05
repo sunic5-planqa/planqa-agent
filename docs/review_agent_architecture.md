@@ -119,6 +119,20 @@ flowchart TD
   렌더링한다. GitHub/VSCode 마크다운 미리보기가 이 펜스를 자동으로 빨강/초록으로 칠해준다 —
   "diff 방식으로 노출"이라는 요구사항을 그대로 만족.
 
+### 실행 통계 — [`run_stats.py`](../src/planqa_eval/review_agent/run_stats.py)
+
+여러 모델/프로필을 실험해서 하나를 고르려면 시간·토큰을 비교할 수 있어야 한다. `LLMClient`
+(`llm/base.py`, 두 에이전트가 공유하는 코드)에 `CallStats`(호출 1회의 소요시간 + 토큰수)와
+`usage: list[CallStats]`를 추가해서, `GeminiClient`/`OllamaClient`가 매 호출마다 자동으로
+기록한다 — 기존 호출부(matcher.py/judge.py 포함)는 코드 변경이 전혀 없다(순수 추가). 소요시간은
+429 재시도 대기까지 포함한다(무료 티어에서 자주 막히는 모델은 그것도 "실제로 느리다"는 뜻이라
+빼지 않음). `cli.py`가 리뷰 실행 전후로 벽시계 시간을 재고 `screen_llm.usage`/
+`confirm_llm.usage`를 모아 `RunStats`를 만들어 `review.json`(`{"issues": [...], "stats":
+{...}}` 형태 — ADR-0001 파서가 이미 지원하는 dict 래핑이라 호환 유지)과 `review.md`(상단
+"실행 통계" 섹션)에 같이 기록한다. `profile`/`screen_model`/`verify_model`도 여기 같이
+남으므로, 나중에 `outputs/review/` 아래 여러 실행 결과를 놓고 봐도 각각 어떤 조합이었는지
+파일명이 아니라 파일 내용으로 알 수 있다.
+
 ## 모델 프로필 — 여러 모델을 실험하기 위한 구조
 
 1/4단계(Global Context, 스크리닝, 정밀판정)는 실제 프롬프트와 파싱 로직을 담고 있고, 모델마다

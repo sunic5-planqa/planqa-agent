@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from planqa_eval.llm.base import LLMClient
+from planqa_eval.llm.base import CallStats, LLMClient
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
@@ -33,7 +33,9 @@ class ScriptedLLM(LLMClient):
         self.model = "fake"
         self._responses = iter(responses)
         self.calls: list[dict[str, str]] = []
+        self.usage: list[CallStats] = []
 
     def complete_json(self, *, system: str, prompt: str) -> Any:
         self.calls.append({"system": system, "prompt": prompt})
+        self.usage.append(CallStats(elapsed_seconds=0.0, prompt_tokens=None, completion_tokens=None, total_tokens=None))
         return next(self._responses)

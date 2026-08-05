@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -11,6 +13,7 @@ from planqa_eval.llm.factory import build_llm_client
 from planqa_eval.review_agent.diff_report import write_report
 from planqa_eval.review_agent.models import DEFAULT_PROFILE, PROFILES
 from planqa_eval.review_agent.pipeline import review_document
+from planqa_eval.review_agent.run_stats import build_run_stats
 from planqa_eval.rulebook import parse_rulebook
 
 DEFAULT_RULEBOOK = Path("data/rulebook/rulebook_v1.0.md")
@@ -35,12 +38,23 @@ def cmd_review(args: argparse.Namespace) -> int:
     # different models (even different backends) — see docs/review_agent_architecture.md.
     screen_llm = build_llm_client(args.backend, args.screen_model)
     confirm_llm = build_llm_client(args.backend, args.verify_model)
+    backend_name = args.backend or os.environ.get("PLANQA_LLM_BACKEND") or "gemini"
 
+    start = time.perf_counter()
     result = review_document(doc_id, document_text, rulebook, screen_llm, confirm_llm, profile)
+    stats = build_run_stats(
+        profile=args.profile,
+        backend=backend_name,
+        screen_llm=screen_llm,
+        confirm_llm=confirm_llm,
+        total_wall_seconds=time.perf_counter() - start,
+    )
 
     out_dir = args.out or Path("outputs/review") / _timestamp()
-    json_path, md_path = write_report(out_dir, result, rulebook)
-    print(f"{doc_id}: {len(result.issues)}건 지적 — {json_path}, {md_path}")
+    json_path, md_path = write_report(out_dir, result, rulebook, stats)
+    print(
+        f"{doc_id}: {len(result.issues)}건 지적, {stats.total_wall_seconds:.1f}초 — {json_path}, {md_path}"
+    )
     return 0
 
 

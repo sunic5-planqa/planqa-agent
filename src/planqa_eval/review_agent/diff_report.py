@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from planqa_eval.review_agent.pipeline import ReviewResult
+from planqa_eval.review_agent.run_stats import RunStats
 from planqa_eval.rulebook import RuleBook
 
 
@@ -13,12 +14,34 @@ def _issue_id(doc_id: str, index: int) -> str:
     return f"REV-{doc_id}-{index:03d}"
 
 
-def to_json_dict(result: ReviewResult) -> list[dict[str, Any]]:
+def _stats_dict(stats: RunStats) -> dict[str, Any]:
+    return {
+        "profile": stats.profile,
+        "backend": stats.backend,
+        "screen_model": stats.screen_model,
+        "verify_model": stats.verify_model,
+        "total_wall_seconds": round(stats.total_wall_seconds, 2),
+        "screen": {
+            "call_count": stats.screen.call_count,
+            "elapsed_seconds": round(stats.screen.elapsed_seconds, 2),
+            "total_tokens": stats.screen.total_tokens,
+        },
+        "confirm": {
+            "call_count": stats.confirm.call_count,
+            "elapsed_seconds": round(stats.confirm.elapsed_seconds, 2),
+            "total_tokens": stats.confirm.total_tokens,
+        },
+    }
+
+
+def to_json_dict(result: ReviewResult, stats: RunStats | None = None) -> list[dict[str, Any]] | dict[str, Any]:
     """Matches docs/adr/0001-review-agent-output-contract.md field-for-field (plus the
     original_text/rationale/fix_direction the diff view needs, which that parser ignores
     but doesn't choke on) — this file can be handed straight to
-    `planqa-eval evaluate --predictions <this file>`."""
-    return [
+    `planqa-eval evaluate --predictions <this file>`. That parser also accepts the
+    {"issues": [...]} wrapper, so passing `stats` (profile/model/time/token cost of this
+    run, for comparing experiments) stays compatible without a separate file."""
+    issues = [
         {
             "issue_id": issue.issue_id or _issue_id(result.doc_id, i),
             "doc_id": issue.doc_id,
@@ -33,6 +56,9 @@ def to_json_dict(result: ReviewResult) -> list[dict[str, Any]]:
         }
         for i, issue in enumerate(result.issues)
     ]
+    if stats is None:
+        return issues
+    return {"issues": issues, "stats": _stats_dict(stats)}
 
 
 def _diff_block(original: str | None, suggestion: str | None) -> str:
@@ -55,8 +81,28 @@ def _diff_block(original: str | None, suggestion: str | None) -> str:
     return f"```diff\n{body}\n```"
 
 
-def to_markdown(result: ReviewResult, rulebook: RuleBook) -> str:
+def _stats_markdown(stats: RunStats) -> list[str]:
+    def _tokens(n: int | None) -> str:
+        return f"{n:,}" if n is not None else "—"
+
+    return [
+        "## 실행 통계",
+        "",
+        f"- 프로필: `{stats.profile}` / 백엔드: `{stats.backend}`",
+        f"- 스크리닝 모델: `{stats.screen_model}` / 정밀판정 모델: `{stats.verify_model}`",
+        f"- 총 소요 시간: {stats.total_wall_seconds:.1f}초",
+        f"- 스크리닝: {stats.screen.call_count}회 호출, {stats.screen.elapsed_seconds:.1f}초, "
+        f"{_tokens(stats.screen.total_tokens)} 토큰",
+        f"- 정밀판정: {stats.confirm.call_count}회 호출 (Global Context 포함), "
+        f"{stats.confirm.elapsed_seconds:.1f}초, {_tokens(stats.confirm.total_tokens)} 토큰",
+        "",
+    ]
+
+
+def to_markdown(result: ReviewResult, rulebook: RuleBook, stats: RunStats | None = None) -> str:
     lines = [f"# 기획서 검토 결과 — {result.doc_id}", ""]
+    if stats is not None:
+        lines += _stats_markdown(stats)
     if result.global_context:
         lines += ["## 문서 요약 (Global Context)", "", result.global_context, ""]
     lines += [f"## 지적 사항 ({len(result.issues)}건)", ""]
@@ -85,10 +131,12 @@ def to_markdown(result: ReviewResult, rulebook: RuleBook) -> str:
     return "\n".join(lines)
 
 
-def write_report(output_dir: Path, result: ReviewResult, rulebook: RuleBook) -> tuple[Path, Path]:
+def write_report(
+    output_dir: Path, result: ReviewResult, rulebook: RuleBook, stats: RunStats | None = None
+) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "review.json"
     md_path = output_dir / "review.md"
-    json_path.write_text(json.dumps(to_json_dict(result), ensure_ascii=False, indent=2), encoding="utf-8")
-    md_path.write_text(to_markdown(result, rulebook), encoding="utf-8")
+    json_path.write_text(json.dumps(to_json_dict(result, stats), ensure_ascii=False, indent=2), encoding="utf-8")
+    md_path.write_text(to_markdown(result, rulebook, stats), encoding="utf-8")
     return json_path, md_path

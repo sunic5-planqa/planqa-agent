@@ -8,7 +8,7 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 
-from planqa_eval.llm.base import LLMClient, parse_json_response
+from planqa_eval.llm.base import CallStats, LLMClient, parse_json_response
 
 DEFAULT_MODEL = "gemini-2.5-flash"
 
@@ -37,6 +37,16 @@ def _load_api_keys(explicit: list[str] | None) -> list[str]:
     )
 
 
+def _call_stats(response: Any, elapsed_seconds: float) -> CallStats:
+    usage = response.usage_metadata
+    return CallStats(
+        elapsed_seconds=elapsed_seconds,
+        prompt_tokens=usage.prompt_token_count if usage else None,
+        completion_tokens=usage.candidates_token_count if usage else None,
+        total_tokens=usage.total_token_count if usage else None,
+    )
+
+
 def _retry_delay_seconds(error: genai_errors.ClientError) -> float:
     details = error.details if isinstance(error.details, dict) else {}
     for detail in details.get("error", {}).get("details", []):
@@ -55,8 +65,10 @@ class GeminiClient(LLMClient):
         self.model = model
         self._clients = [genai.Client(api_key=key) for key in _load_api_keys(api_keys)]
         self._current = 0
+        self.usage: list[CallStats] = []
 
     def complete_json(self, *, system: str, prompt: str) -> Any:
+        start = time.perf_counter()
         last_error: genai_errors.ClientError | None = None
         for _cycle in range(_MAX_CYCLES):
             for _ in range(len(self._clients)):
@@ -70,6 +82,9 @@ class GeminiClient(LLMClient):
                             response_mime_type="application/json",
                         ),
                     )
+                    # Elapsed includes any 429 backoff above — a model that gets throttled a
+                    # lot on the free tier really is slower in practice for this run.
+                    self.usage.append(_call_stats(response, time.perf_counter() - start))
                     return parse_json_response(response.text)
                 except genai_errors.ClientError as error:
                     if error.code != 429:
