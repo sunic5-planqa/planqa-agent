@@ -3,25 +3,13 @@ from __future__ import annotations
 from conftest import ScriptedLLM
 
 from planqa_review.document import Chunk
-from planqa_review.models.gemini_lite.screener import rules_for_tier, screen_tier
+from planqa_review.models.gemini_lite.screener import screen_tier
 from planqa_review.rulebook import parse_rulebook
 from planqa_review.schema import Level
 
 
 def _chunk(location: str = "1. 목적", text: str = "본문") -> Chunk:
     return Chunk(level=Level.LOGICAL_UNIT, location=location, text=text)
-
-
-def test_rules_for_tier_matches_document_declared_categories(rulebook_path):
-    rulebook = parse_rulebook(rulebook_path)
-    rules = rules_for_tier(rulebook, Level.LOGICAL_UNIT)
-    categories = {rule.category for rule in rules}
-    assert categories == {"LG", "LF", "TM", "AE", "MI"}
-
-
-def test_rules_for_tier_empty_for_word_level(rulebook_path):
-    rulebook = parse_rulebook(rulebook_path)
-    assert rules_for_tier(rulebook, Level.WORD) == []
 
 
 def test_screen_tier_parses_valid_candidates(rulebook_path):

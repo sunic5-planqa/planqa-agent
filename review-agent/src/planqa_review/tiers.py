@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from planqa_review.rulebook import RuleBook, RuleDef
 from planqa_review.schema import Level
 
 # Transcribed from rulebook_v1.0.md §2 "카테고리별 검토 위계". That table's cells contain
@@ -24,3 +25,11 @@ TIER_ORDER: tuple[Level, ...] = (
     Level.PARAGRAPH,
     Level.SENTENCE,
 )
+
+
+def rules_for_tier(rulebook: RuleBook, level: Level) -> list[RuleDef]:
+    """Shared across every model profile (not just gemini_lite) and by the pipeline's own
+    instrumentation, which needs to know which rules a tier's call covers without importing
+    a specific profile's internals."""
+    categories = TIER_CATEGORIES.get(level, ())
+    return [rule for rule in rulebook.rules.values() if rule.category in categories]

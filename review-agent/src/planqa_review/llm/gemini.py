@@ -61,10 +61,19 @@ def _retry_delay_seconds(error: genai_errors.APIError) -> float:
 
 
 class GeminiClient(LLMClient):
-    def __init__(self, model: str = DEFAULT_MODEL, api_keys: list[str] | None = None) -> None:
+    # Defaults to 0.0 (not the API's own default) so re-running the same config for an
+    # ablation comparison isn't confounded by sampling noise on top of the variable actually
+    # being tested. Override explicitly if a run genuinely wants sampling diversity.
+    def __init__(
+        self,
+        model: str = DEFAULT_MODEL,
+        api_keys: list[str] | None = None,
+        temperature: float = 0.0,
+    ) -> None:
         self.model = model
         self._clients = [genai.Client(api_key=key) for key in _load_api_keys(api_keys)]
         self._current = 0
+        self._temperature = temperature
         self.usage: list[CallStats] = []
 
     def complete_json(self, *, system: str, prompt: str) -> Any:
@@ -80,6 +89,7 @@ class GeminiClient(LLMClient):
                         config=types.GenerateContentConfig(
                             system_instruction=system,
                             response_mime_type="application/json",
+                            temperature=self._temperature,
                         ),
                     )
                     # Elapsed includes any 429/5xx backoff above — a model that gets

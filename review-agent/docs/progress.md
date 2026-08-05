@@ -396,3 +396,111 @@
 - Pick the DOC-001–020 ablation benchmark subset (something like the 5-8 already-tested
   docs + DOC-008 for the false-positive check).
 - Start executing: 구조 실험(제안5 vs 6 vs 7 등) 먼저.
+
+## 2026-08-06 (checkpoint, mid-task) — Decisions locked in + ablation infra in progress
+
+Written mid-task (context compaction imminent) specifically so none of this is lost.
+
+### Standing decisions (durable, apply to all future sessions on this repo)
+
+- **Experiment order, confirmed**: 구조(pipeline/agent structure) → 퓨샷(few-shot delivery)
+  → 모델(model swap). Reasoning: structure changes need new code (most expensive to
+  redo), few-shot is prompt-only (cheap to iterate once structure is fixed), model swap
+  needs new client code (do last, fewest times). Caveat: re-check the few-shot ratio
+  against whichever model wins the final model-ablation step, since model
+  capability/few-shot need interact (weaker models lean on examples more).
+- **User will build pipeline/agent structures ONE AT A TIME** after the measurement
+  infra below is ready — not all at once. Each structure = its own model profile under
+  `src/planqa_review/models/<name>/`, independently managed. **`outputs/` folder naming
+  must make the originating agent structure obvious** (e.g. include profile name in the
+  path) — this was an explicit instruction, implemented via `_timestamp()`-based
+  `--out` default in `cli.py` gaining the profile name (see Next below — not done yet
+  as of this checkpoint).
+- **Evaluation scope**: recall/precision/time/token measurement uses **only DOC-001–020**
+  for now (the real NxEF product docs). DOC-021–040 are teammate-generated
+  (mostly-AI-generated, deliberately-wrong-by-design) documents built to backfill example
+  coverage for under-represented rules — set aside for a later rule-coverage-gap-filling
+  pass, not general evaluation. DOC-000 was never usable regardless (no real source text).
+- **eval-agent may now be run live** (teammate gave permission) — but explicitly **not
+  yet**: only after this repo's own time/token measurement work is finished. Do not start
+  that integration until told.
+- **Frozen files under `C:\Users\HYESEO\Desktop\혜서\suni\frozen_files\` are the single
+  source of truth going forward** — not eval-agent's copies. Already pulled in:
+  `Rulebook Simple V1.0 frozen.md` (byte-identical to what eval-agent had — no rule
+  content changed by this swap), `QA Dataset frozen.xlsx` (has 58-row exception dataset
+  eval-agent's copy lacked — see 2026-08-06 entry above), `01_Raw_Documents/` (41 files,
+  DOC-001–040 + DOC000 placeholder) and `[멘토용]_오류_정답지.md`. **The document content
+  itself must never be read while doing pipeline/prompt engineering work** (it's the blind
+  eval set — reading it while tuning prompts is leakage). All copies so far were done via
+  filesystem operations only (`cp`/`Copy-Item -LiteralPath`), never the Read tool. Watch
+  for: frozen source filenames may arrive NFD-normalized (decomposed Hangul jamo) instead
+  of NFC — normalize with `unicodedata.normalize("NFC", name)` before committing, or
+  filename string-matching elsewhere in the codebase silently breaks.
+- **Read-only/verification commands need no prior approval going forward** — including
+  against `feature/eval-agent` (worktree, running its tests, etc.) or arbitrary bash.
+  Only actual modifications (file edits, commits, pushes) need to be flagged/confirmed.
+  (Consistent with existing memory `feedback-no-push-without-request`, but broader — that
+  one was push-specific, this covers all read-only investigation.)
+- Corrected categorization: pipeline-**structure** options = 셀1–4 (2×2 of 방안1/2 ×
+  1안/2안) + 제안5 (deterministic tier×category parallel, no tool-calling) + 제안6
+  (Generator-Critic) + 제안7 (Chain-of-Verification decomposition). Few-shot **delivery**
+  options (orthogonal, layer onto any structure) = 제안8 (retrieval-based dynamic
+  few-shot), 제안9 (static per-rule bank + prompt caching), 제안10 (explicit
+  violation:exception ratio, now buildable with the 58-row exception set).
+
+### This session's engineering task: ablation measurement infrastructure
+
+User's explicit ask: build the **measurement structure** so ablation testing is possible,
+*before* any new pipeline/agent structure gets built. Scope is instrumentation/harness
+only — not fixing `tiers.py`'s stale (pre-41-rule) `TIER_CATEGORIES` mapping, which stays
+deferred to the actual structure-building phase.
+
+**Done so far (this checkpoint):**
+- Moved `rules_for_tier()` from `models/gemini_lite/screener.py` to `tiers.py` — it's
+  profile-agnostic rulebook/tier logic, and the instrumentation work below (in
+  profile-agnostic `pipeline.py`) needs to call it without importing a specific profile's
+  internals. Tests moved accordingly (`test_tiers.py` now owns those cases,
+  `test_screener.py` trimmed). 47 passed after this refactor.
+- Added `temperature: float = 0.0` (default, not each backend's own default — for
+  ablation reproducibility, so re-running the same config isn't confounded by sampling
+  noise) to `GeminiClient.__init__` (passed into `GenerateContentConfig`) and
+  `OllamaClient.__init__` (passed into the request JSON's `options.temperature`).
+  Threaded through `build_llm_client(backend, model, temperature=0.0)` in `llm/factory.py`.
+  **Not yet done**: wiring a `--temperature` CLI flag through `cli.py` to the two
+  `build_llm_client()` calls in `cmd_review` — next immediate step.
+
+**Still to do (in order), per the todo list active at checkpoint time:**
+1. Finish `--temperature` CLI plumbing (in progress when checkpoint was written).
+2. Call-event instrumentation in `pipeline.py`: tag each LLM call with
+   `(stage: "context"|"screen"|"confirm", tier: Level, rule_ids/category_codes covered)`
+   by wrapping the tier loop (pipeline.py already knows the tier and can call
+   `tiers.rules_for_tier()` itself) — record `len(llm.usage)` before/after each
+   `profile.*` call to slice out the new `CallStats` entries and pair them with the tag.
+   Design intent: whatever granularity a *future* profile actually calls at (per-tier
+   today, maybe per-category or per-rule later) is what gets captured — don't force fake
+   per-rule precision onto a batched call that covers multiple rules at once.
+3. Extend `run_stats.py`: add rollups grouped by tier and by category/rule using the
+   event log from step 2, not just the existing screen/confirm-bucket totals.
+4. Add `openpyxl` to `review-agent/pyproject.toml` dependencies — needed for step 5.
+5. New deterministic scorer module (e.g. `planqa_review/scoring.py`): reads golden rows
+   for a given doc_id straight from the frozen xlsx (`data/qa_dataset/qa_dataset_frozen.xlsx`,
+   sheet `"golden dataset"`), compares against a `review.json`'s issues by
+   `rule_id` + location containment (deterministic, no LLM matching needed — eval-agent's
+   fuzzy LLM matcher can't be reused since we must not touch `feature/eval-agent`, but a
+   small fixed benchmark doesn't need fuzzy matching anyway). Produces recall/precision
+   per rule_id, per category, and overall for one doc or a doc set.
+6. Define the ablation benchmark doc list (e.g. in a new `planqa_review/benchmark.py`) —
+   leaning toward reusing the 10 already-tested docs (DOC-003/004/005/006/007/010/011/
+   012/015/016) + DOC-008 (the designated false-positive/clean-doc test case) rather than
+   picking a fresh subset, since real historical run data already exists for those 10.
+7. Experiment runner: sweeps the benchmark set for a given (profile, backend, models,
+   temperature) combo, collects `RunStats` + scoring results, writes one aggregated
+   report. Naming convention: `outputs/review/<profile>/<timestamp>/...` (profile name in
+   the path — the explicit "폴더명으로 어떤 에이전트 구조인지 알기 쉽게" requirement).
+   Also update the plain `cli.py review` command's default `--out` to the same
+   `<profile>/<timestamp>` shape, not just the runner.
+8. Tests for everything above.
+9. Full test suite green.
+10. Update `docs/review_agent_architecture.md` (new instrumentation/scoring/runner
+    sections) and this progress log with the final state.
+11. Commit locally (no push — standing rule, only push when explicitly asked).

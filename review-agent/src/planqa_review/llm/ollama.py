@@ -16,9 +16,10 @@ class OllamaClient(LLMClient):
     """Local Qwen backend via Ollama's REST API — no API key needed, but Ollama and the
     model must already be installed/pulled on this machine."""
 
-    def __init__(self, model: str = DEFAULT_MODEL, host: str | None = None) -> None:
+    def __init__(self, model: str = DEFAULT_MODEL, host: str | None = None, temperature: float = 0.0) -> None:
         self.model = model
         self._host = (host or os.environ.get("OLLAMA_HOST") or DEFAULT_HOST).rstrip("/")
+        self._temperature = temperature
         self.usage: list[CallStats] = []
 
     def complete_json(self, *, system: str, prompt: str) -> Any:
@@ -33,6 +34,7 @@ class OllamaClient(LLMClient):
                 ],
                 "format": "json",
                 "stream": False,
+                "options": {"temperature": self._temperature},
             },
             timeout=120.0,
         )

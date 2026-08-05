@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from planqa_review.llm.base import LLMClient
 from planqa_review.document import Chunk
-from planqa_review.tiers import TIER_CATEGORIES
+from planqa_review.tiers import rules_for_tier
 from planqa_review.rulebook import RuleBook, RuleDef
 from planqa_review.schema import Level
 
@@ -24,11 +24,6 @@ class ScreenCandidate:
     rule_id: str
     quoted_text: str
     reason: str
-
-
-def rules_for_tier(rulebook: RuleBook, level: Level) -> list[RuleDef]:
-    categories = TIER_CATEGORIES.get(level, ())
-    return [rule for rule in rulebook.rules.values() if rule.category in categories]
 
 
 def _build_prompt(chunks: list[Chunk], rules: list[RuleDef], global_context: str) -> str:
