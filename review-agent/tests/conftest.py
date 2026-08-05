@@ -20,6 +20,11 @@ def source_dir() -> Path:
     return DATA_DIR / "source_documents"
 
 
+@pytest.fixture
+def qa_dataset_path() -> Path:
+    return DATA_DIR / "qa_dataset" / "qa_dataset_frozen.xlsx"
+
+
 class ScriptedLLM(LLMClient):
     """Returns whatever `responses` yields next, in call order — lets tests script exact
     LLM replies without any network access."""

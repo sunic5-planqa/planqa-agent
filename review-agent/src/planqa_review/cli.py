@@ -10,11 +10,14 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from planqa_review.llm.factory import build_llm_client
+from planqa_review.benchmark import BENCHMARK_DOC_IDS, DEFAULT_QA_DATASET, DEFAULT_SOURCE_DIR
 from planqa_review.diff_report import write_report
+from planqa_review.experiment import ExperimentConfig, run_experiment, write_experiment_report
 from planqa_review.models import DEFAULT_PROFILE, PROFILES
 from planqa_review.pipeline import review_document
 from planqa_review.run_stats import build_run_stats
 from planqa_review.rulebook import parse_rulebook
+from planqa_review.scoring import load_golden_rows
 
 DEFAULT_RULEBOOK = Path("data/rulebook/rulebook_v1.0.md")
 
@@ -36,8 +39,8 @@ def cmd_review(args: argparse.Namespace) -> int:
 
     # Two separate clients so the cheap screening pass and the precise confirm pass can run
     # different models (even different backends) — see docs/review_agent_architecture.md.
-    screen_llm = build_llm_client(args.backend, args.screen_model)
-    confirm_llm = build_llm_client(args.backend, args.verify_model)
+    screen_llm = build_llm_client(args.backend, args.screen_model, args.temperature)
+    confirm_llm = build_llm_client(args.backend, args.verify_model, args.temperature)
     backend_name = args.backend or os.environ.get("PLANQA_LLM_BACKEND") or "gemini"
 
     start = time.perf_counter()
@@ -49,15 +52,47 @@ def cmd_review(args: argparse.Namespace) -> int:
         screen_llm=screen_llm,
         confirm_llm=confirm_llm,
         total_wall_seconds=time.perf_counter() - start,
+        call_events=result.call_events,
     )
 
-    out_dir = args.out or Path("outputs/review") / _timestamp()
+    # Profile name in the default path so `outputs/` makes the originating agent
+    # structure obvious at a glance, not just a bare timestamp.
+    out_dir = args.out or Path("outputs/review") / args.profile / _timestamp()
     json_path, md_path = write_report(out_dir, result, rulebook, stats)
     print(
         f"{doc_id}: {len(result.issues)}건 지적, {stats.total_wall_seconds:.1f}초 — {json_path}, {md_path}"
     )
     for error in result.tier_errors:
         print(f"  ⚠️ {error}", file=sys.stderr)
+    return 0
+
+
+def cmd_experiment(args: argparse.Namespace) -> int:
+    rulebook = parse_rulebook(args.rulebook)
+    golden_rows = list(load_golden_rows(args.qa_dataset))
+    doc_ids = tuple(args.doc_ids) if args.doc_ids else BENCHMARK_DOC_IDS
+
+    config = ExperimentConfig(
+        profile=args.profile,
+        backend=args.backend,
+        screen_model=args.screen_model,
+        verify_model=args.verify_model,
+        temperature=args.temperature,
+        doc_ids=doc_ids,
+    )
+    experiment = run_experiment(config, rulebook, args.rulebook, args.source_dir, golden_rows)
+
+    out_dir = args.out or Path("outputs/experiments") / args.profile / _timestamp()
+    write_experiment_report(out_dir, experiment, rulebook)
+
+    score = experiment.summary.score.overall
+    print(
+        f"{len(experiment.documents)}개 문서, recall={score.recall}, precision={score.precision}, "
+        f"{experiment.summary.total_wall_seconds:.1f}초 — {out_dir}"
+    )
+    for doc in experiment.documents:
+        for error in doc.result.tier_errors:
+            print(f"  ⚠️ [{doc.doc_id}] {error}", file=sys.stderr)
     return 0
 
 
@@ -76,12 +111,45 @@ def build_parser() -> argparse.ArgumentParser:
     review_parser.add_argument("--screen-model", default=None, help="1단계 스크리닝용 모델(저비용)")
     review_parser.add_argument("--verify-model", default=None, help="2단계 정밀판정/컨텍스트 추출용 모델(고비용)")
     review_parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="샘플링 온도, 기본 0.0(ablation 재현성 위해) — 다양성 원하면 명시적으로 올릴 것",
+    )
+    review_parser.add_argument(
         "--profile",
         default=DEFAULT_PROFILE,
         choices=sorted(PROFILES),
         help="프롬프트/로직 전략 (src/planqa_review/models/) — 모델 실험용",
     )
     review_parser.set_defaults(func=cmd_review)
+
+    experiment_parser = subparsers.add_parser(
+        "experiment", help="벤치마크 문서 세트를 골든 데이터셋과 대조해 recall/precision·시간·토큰 비용을 측정"
+    )
+    experiment_parser.add_argument("--rulebook", type=Path, default=DEFAULT_RULEBOOK)
+    experiment_parser.add_argument("--source-dir", type=Path, default=DEFAULT_SOURCE_DIR)
+    experiment_parser.add_argument("--qa-dataset", type=Path, default=DEFAULT_QA_DATASET)
+    experiment_parser.add_argument(
+        "--doc-ids", nargs="+", default=None, help="생략 시 benchmark.BENCHMARK_DOC_IDS 사용"
+    )
+    experiment_parser.add_argument("--out", type=Path, default=None, help="생략 시 outputs/experiments/<profile>/<timestamp>/")
+    experiment_parser.add_argument("--backend", default=None, help="overrides PLANQA_LLM_BACKEND (gemini|ollama)")
+    experiment_parser.add_argument("--screen-model", default=None, help="1단계 스크리닝용 모델(저비용)")
+    experiment_parser.add_argument("--verify-model", default=None, help="2단계 정밀판정/컨텍스트 추출용 모델(고비용)")
+    experiment_parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="샘플링 온도, 기본 0.0(ablation 재현성 위해) — 다양성 원하면 명시적으로 올릴 것",
+    )
+    experiment_parser.add_argument(
+        "--profile",
+        default=DEFAULT_PROFILE,
+        choices=sorted(PROFILES),
+        help="프롬프트/로직 전략 (src/planqa_review/models/) — 모델 실험용",
+    )
+    experiment_parser.set_defaults(func=cmd_experiment)
 
     return parser
 

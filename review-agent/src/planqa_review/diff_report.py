@@ -32,6 +32,20 @@ def _stats_dict(stats: RunStats) -> dict[str, Any]:
             "elapsed_seconds": round(stats.confirm.elapsed_seconds, 2),
             "total_tokens": stats.confirm.total_tokens,
         },
+        "by_stage": _usage_map_dict(stats.by_stage),
+        "by_tier": _usage_map_dict(stats.by_tier),
+        "by_rule": _usage_map_dict(stats.by_rule),
+    }
+
+
+def _usage_map_dict(usage_map: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        key: {
+            "call_count": usage.call_count,
+            "elapsed_seconds": round(usage.elapsed_seconds, 2),
+            "total_tokens": usage.total_tokens,
+        }
+        for key, usage in usage_map.items()
     }
 
 

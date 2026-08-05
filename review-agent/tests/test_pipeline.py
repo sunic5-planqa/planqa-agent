@@ -76,6 +76,15 @@ def test_review_document_end_to_end(rulebook_path):
     assert issue.location == "1. 목적"
     assert issue.fix_direction == "목적: 사용자 재탐색 편의성을 높이기 위함."
 
+    # 1 context + 4 screen (one per tier) + 1 confirm (only Logical Unit had a candidate)
+    assert len(result.call_events) == 6
+    context_events = [e for e in result.call_events if e.stage == "context"]
+    assert len(context_events) == 1 and context_events[0].tier is None
+    confirm_events = [e for e in result.call_events if e.stage == "confirm"]
+    assert len(confirm_events) == 1
+    assert confirm_events[0].tier.value == "Logical Unit"
+    assert confirm_events[0].rule_ids == ("MI-01",)
+
 
 def test_review_document_dedupes_across_tiers(rulebook_path):
     rulebook = parse_rulebook(rulebook_path)

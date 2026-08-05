@@ -504,3 +504,72 @@ deferred to the actual structure-building phase.
 10. Update `docs/review_agent_architecture.md` (new instrumentation/scoring/runner
     sections) and this progress log with the final state.
 11. Commit locally (no push — standing rule, only push when explicitly asked).
+
+## 2026-08-06 (continued) — Ablation measurement infrastructure complete
+
+Finished every remaining item from the checkpoint above. All new code is `ScriptedLLM`-
+tested, no network/API key needed to verify it.
+
+- **`openpyxl>=3.1`** added to `pyproject.toml`, installed into the venv.
+- **`planqa_review/scoring.py`** (new) — `load_golden_rows(xlsx_path)` reads the
+  `"golden dataset"` sheet of `data/qa_dataset/qa_dataset_frozen.xlsx`. Inspected the raw
+  sheet first: 983 rows, but only **131** carry real data (doc_id + rule_id present) — the
+  other 852 are blank spacer rows the loader skips. Of those 131: 76 are DOC-000 (excluded
+  from scope anyway), the rest span DOC-001–040. Confirmed the sheet's 41 distinct
+  `Rule ID` values match the current (post 2026-08-05) 41-rule rulebook, and its `Level`
+  column strings (`"Document"`/`"Logical Unit"`/`"Paragraph"`/`"Sentence"`) match
+  `schema.Level`'s values exactly — no translation needed.
+  `score_issues(doc_id, issues, golden_rows)` matches deterministically: same `rule_id` +
+  overlapping (substring, either direction) `location` string = TP; unmatched golden row =
+  FN; unmatched predicted issue = FP. `ScoreCounts` (TP/FP/FN + `recall`/`precision`
+  properties) rolls up by rule, by category (derived from the rule_id prefix, no
+  `RuleBook` dependency needed), and overall. `merge_score_results()` sums multiple
+  documents' `ScoreResult`s into one. 14 tests, including two against the real xlsx file.
+- **`planqa_review/benchmark.py`** (new) — `BENCHMARK_DOC_IDS`: the 10 previously-tested
+  docs (DOC-003/004/005/006/007/010/011/012/015/016, all of which have golden rows) +
+  DOC-008 (the deliberate zero-golden-row false-positive test case) = 11 docs. Verified
+  each doc_id actually has 0 or 1 matching file in `source_documents/` via
+  `resolve_source_path()` (glob `f"{doc_id}_*"`, raises if 0 or 2+ matches — filenames are
+  Korean titles, not just the doc_id). 6 tests.
+- **`planqa_review/experiment.py`** (new) — `run_experiment(config, rulebook,
+  rulebook_path, source_dir, golden_rows, build_clients=None)` sweeps
+  `config.doc_ids` (defaults to `BENCHMARK_DOC_IDS`), building a **fresh** LLM client pair
+  per document (mixing usage across documents would corrupt per-document token/time
+  stats) via an injectable `build_clients` callback — defaults to the real
+  `build_llm_client`, tests override it with scripted clients. Produces
+  `ExperimentSummary`: `RunStats`-shaped totals (`screen`/`confirm`/`by_stage`/`by_tier`/
+  `by_rule`) summed across every document, plus the benchmark-wide `ScoreResult`.
+  `write_experiment_report()` writes one `<doc_id>/review.{json,md}` per document (reusing
+  `diff_report.write_report` — same shape a single `planqa-review review` run produces)
+  plus a root `summary.json`/`summary.md` (category recall/precision table + per-document
+  issue-count table). 4 tests (2-document sweep, per-document isolation check, markdown
+  content check, file-write check).
+- **CLI**: new `planqa-review experiment` subcommand (`--rulebook`/`--source-dir`/
+  `--qa-dataset`/`--doc-ids`/`--backend`/`--screen-model`/`--verify-model`/
+  `--temperature`/`--profile`/`--out`), output defaults to
+  `outputs/experiments/<profile>/<timestamp>/`.
+- **`run_stats.py`**: `RunStats` gained `by_stage`/`by_tier`/`by_rule` (derived from the
+  `call_events` log, see `instrumentation.py`) alongside the existing `screen`/`confirm`.
+  `diff_report.py`'s `review.json` output now includes those three breakdowns too
+  (markdown summary unchanged — kept to the overall totals, fine detail stays JSON-only).
+- Full suite: **83 passed** (59 before this session's scoring/benchmark/experiment work,
+  +24 new: scoring 14, benchmark 6, experiment 4).
+- `docs/review_agent_architecture.md`: added an "Ablation 측정 인프라" section covering
+  all four new pieces (temperature reproducibility, call-event instrumentation, scoring,
+  benchmark set, experiment runner) plus a 검증 상태 bullet noting the 83-test state.
+
+### Next
+
+- **Not yet done**: actually running `planqa-review experiment` against a real Gemini
+  backend over the 11-doc benchmark set to get a real recall/precision/cost baseline —
+  this infra has only been exercised with `ScriptedLLM`, never live. That's the natural
+  next step before touching any new pipeline/agent structure.
+- Per the agreed experiment order (구조 → 퓨샷 → 모델): once a live baseline exists, start
+  building/comparing pipeline **structures** one at a time (each independently managed,
+  named so its `outputs/` folder makes the structure obvious), using this harness to
+  compare them.
+- `tiers.py`'s `TIER_CATEGORIES` is still stale (pre-41-rule §2) — deliberately deferred to
+  the structure-building phase, not touched by this ablation-infra work.
+- eval-agent may be run live now (teammate approved) but only after this repo's own
+  measurement work is done — that's now true, but running it wasn't asked for in this
+  session and hasn't been done.

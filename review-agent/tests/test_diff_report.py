@@ -19,6 +19,9 @@ def _stats() -> RunStats:
         total_wall_seconds=12.34,
         screen=ModelUsage(call_count=4, elapsed_seconds=5.0, total_tokens=1000),
         confirm=ModelUsage(call_count=2, elapsed_seconds=7.34, total_tokens=None),
+        by_stage={"screen": ModelUsage(call_count=4, elapsed_seconds=5.0, total_tokens=1000)},
+        by_tier={"Document": ModelUsage(call_count=1, elapsed_seconds=1.0, total_tokens=200)},
+        by_rule={"MI-01": ModelUsage(call_count=1, elapsed_seconds=1.0, total_tokens=200)},
     )
 
 

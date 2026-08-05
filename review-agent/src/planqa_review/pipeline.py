@@ -6,7 +6,8 @@ from types import ModuleType
 from planqa_review.llm.base import LLMClient
 from planqa_review.dedupe import dedupe_issues
 from planqa_review.document import parse_document
-from planqa_review.tiers import TIER_ORDER
+from planqa_review.instrumentation import CallEvent, record_call
+from planqa_review.tiers import TIER_ORDER, rules_for_tier
 from planqa_review.rulebook import RuleBook
 from planqa_review.schema import Issue
 
@@ -17,6 +18,7 @@ class ReviewResult:
     global_context: str
     issues: tuple[Issue, ...]
     tier_errors: tuple[str, ...] = ()
+    call_events: tuple[CallEvent, ...] = ()
 
 
 def review_document(
@@ -37,11 +39,25 @@ def review_document(
     Each stage is isolated with a broad except: models occasionally return malformed JSON
     even in JSON mode (seen live: "Invalid \\uXXXX escape"), and a single tier failing
     shouldn't discard every other tier's already-successful results for this document. Every
-    failure is recorded in `tier_errors` rather than silently swallowed."""
+    failure is recorded in `tier_errors` rather than silently swallowed.
+
+    Every LLM call is also wrapped with `record_call` so `call_events` carries per-tier/
+    per-rule cost attribution for ablation analysis (see instrumentation.py, run_stats.py)
+    — this orchestrator is the only place that knows which rules a call was for, so it's
+    the only place that needs to change to get that attribution; the profile functions
+    themselves are untouched."""
     tier_errors: list[str] = []
+    events: list[CallEvent] = []
 
     try:
-        global_context = profile.extract_global_context(document_text, confirm_llm)
+        global_context = record_call(
+            confirm_llm,
+            stage="context",
+            tier=None,
+            rule_ids=(),
+            events=events,
+            call=lambda: profile.extract_global_context(document_text, confirm_llm),
+        )
     except Exception as error:  # noqa: BLE001 - intentionally broad, see docstring
         global_context = ""
         tier_errors.append(f"Global Context 추출 실패: {error}")
@@ -53,13 +69,28 @@ def review_document(
         chunks = list(tree.chunks_for(level))
         if not chunks:
             continue
+        tier_rule_ids = tuple(rule.rule_id for rule in rules_for_tier(rulebook, level))
         try:
-            candidates = profile.screen_tier(chunks, rulebook, level, global_context, screen_llm)
-            all_issues.extend(
-                profile.confirm_candidates(
-                    candidates, chunks, rulebook, doc_id, level, global_context, document_text, confirm_llm
-                )
+            candidates = record_call(
+                screen_llm,
+                stage="screen",
+                tier=level,
+                rule_ids=tier_rule_ids,
+                events=events,
+                call=lambda: profile.screen_tier(chunks, rulebook, level, global_context, screen_llm),
             )
+            candidate_rule_ids = tuple(sorted({candidate.rule_id for candidate in candidates}))
+            issues = record_call(
+                confirm_llm,
+                stage="confirm",
+                tier=level,
+                rule_ids=candidate_rule_ids,
+                events=events,
+                call=lambda: profile.confirm_candidates(
+                    candidates, chunks, rulebook, doc_id, level, global_context, document_text, confirm_llm
+                ),
+            )
+            all_issues.extend(issues)
         except Exception as error:  # noqa: BLE001 - intentionally broad, see docstring
             tier_errors.append(f"{level.value} 위계 검토 실패: {error}")
 
@@ -68,4 +99,5 @@ def review_document(
         global_context=global_context,
         issues=tuple(dedupe_issues(all_issues)),
         tier_errors=tuple(tier_errors),
+        call_events=tuple(events),
     )

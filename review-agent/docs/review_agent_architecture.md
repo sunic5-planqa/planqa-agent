@@ -197,6 +197,87 @@ uv run planqa-review review --input <파일> --profile qwen_local ...    # 예�
 "어떤 LLM을 호출할지"라 서로 독립적이다 — 같은 프로필로 모델만 바꿔보거나, 같은 모델로 프로필만
 바꿔보는 것 둘 다 가능하다.
 
+## Ablation 측정 인프라
+
+파이프라인/퓨샷/모델을 실제로 실험하기 전에, "무엇이 얼마나 바뀌었는지"를 재현 가능하게 잴 수
+있는 계측 구조를 먼저 만들었다(구조 실험보다 먼저 하기로 합의한 순서). 네 조각으로 나뉜다.
+
+### 재현성 — `temperature`
+
+`GeminiClient`/`OllamaClient`/`build_llm_client`가 전부 `temperature: float = 0.0`을
+기본값으로 받는다. 각 백엔드 API 자체의 기본값이 아니라 명시적으로 0.0을 쓰는 이유는, 같은
+설정으로 ablation 재실행을 했을 때 결과 차이가 "설정을 바꿔서"가 아니라 "샘플링이 달라서"인
+경우를 없애기 위해서다. `planqa-review review --temperature`/`planqa-review experiment
+--temperature`로 명시적으로 올릴 수 있다(다양성이 필요한 실험엔).
+
+### 호출 단위 계측 — [`instrumentation.py`](../src/planqa_review/instrumentation.py)
+
+`pipeline.py`의 모든 LLM 호출(Global Context 1회, 위계별 스크리닝/정밀판정)이
+`record_call(llm, stage=..., tier=..., rule_ids=..., events=..., call=...)`로 감싸여 있다.
+호출 전후로 `llm.usage`의 길이 차이를 보고, 새로 추가된 `CallStats`마다 그 호출이 어떤
+`stage`("context"/"screen"/"confirm")·`tier`(Level | None)·`rule_ids`(그 배치 호출이
+다룬 룰 id들)였는지 태그를 붙여 `CallEvent`로 남긴다. 이 태깅은 오케스트레이터(`pipeline.py`)
+쪼에서만 하는데, 어떤 호출이 어떤 위계/룰을 다뤘는지는 오케스트레이터만 알기 때문이다 — 모델
+프로필 함수들(`extract_global_context`/`screen_tier`/`confirm_candidates`)은 이 계측을 위해
+전혀 수정되지 않았다. 배치 호출 하나가 여러 룰을 다루면(예: 한 위계의 스크리닝이 5개 룰을
+동시에 봄) 그 호출의 전체 비용이 **각** 룰에 그대로 귀속된다 — 룰별 버킷을 다 더해도 실행
+총합과 안 맞는 게 의도된 설계다(질문이 "룰 X를 검토하는 데 든 비용"이지, 총비용을 룰별로
+겹치지 않게 쪼개는 게 아니라서).
+
+### 비용 롤업 — [`run_stats.py`](../src/planqa_review/run_stats.py)
+
+`RunStats`에 기존 `screen`/`confirm`(고정 2역할) 외에 `by_stage`/`by_tier`/`by_rule`
+(`dict[str, ModelUsage]`)이 추가됐다. 전부 `call_events`에서 파생되므로, 나중에 3단계 이상
+쓰는 프로필(예: critic 패스 추가)이 와도 `by_stage`에 새 키가 하나 더 생길 뿐 스키마 변경이
+필요 없다. `diff_report.py`의 `review.json`에도 이 세 dict가 그대로 실린다(마크다운 쪽은
+전체 요약만 유지 — 세부 롤업까지 넣으면 리포트가 너무 길어짐).
+
+### 골든 데이터셋 스코어러 — [`scoring.py`](../src/planqa_review/scoring.py)
+
+`data/qa_dataset/qa_dataset_frozen.xlsx`의 `"golden dataset"` 시트(983행 중 실제 데이터가
+있는 131행 — 나머지는 서식용 빈 행)를 `load_golden_rows()`로 읽어 `GoldenRow(doc_id, level,
+rule_id, location)`로 정규화한다. `score_issues(doc_id, issues, golden_rows)`가 LLM 없이
+결정론적으로 매칭한다: 같은 `rule_id`이고 두 `location` 문자열이 (정규화 후) 서로를
+포함하면 TP, 매칭 못 한 golden row는 FN, 매칭 못 한 예측 이슈는 FP — 위치 문자열이
+완전히 같을 필요는 없다(golden 위치가 "1-5. 사용자 정의 ↔ 5-2. KPI 현황"처럼 비교 대상 두
+쪽을 다 적어두는 경우가 많아서, 예측 쪽이 한쪽만 가리켜도 포함 관계로 잡히게 했다). `overall`/
+`by_rule`/`by_category`별로 `ScoreCounts`(TP/FP/FN + `recall`/`precision` 프로퍼티)를 낸다.
+`merge_score_results()`로 여러 문서의 `ScoreResult`를 하나로 합칠 수 있다.
+
+### 벤치마크 문서 세트 — [`benchmark.py`](../src/planqa_review/benchmark.py)
+
+`BENCHMARK_DOC_IDS`가 ablation에 실제로 돌릴 11개 문서를 고정한다: DOC-003/004/005/006/
+007/010/011/012/015/016(전부 golden row 있음, TP 위주 검증) + DOC-008(golden row 0건 —
+의도된 false-positive 전용 케이스, 파이프라인이 없는 문제를 만들어내지 않는지 확인용). 전체
+DOC-001~020(20개) 중 이미 수동 검토를 거친 부분집합을 재사용해 매 실험 반복 비용을 낮췄다.
+DOC-000(실제 원문 없음)과 DOC-021~040(팀원이 만든 합성 문서, 룰 커버리지 부족분 채우기용
+— 지금 범위 아님)은 제외.
+
+### 실험 러너 — [`experiment.py`](../src/planqa_review/experiment.py) / `planqa-review experiment`
+
+`run_experiment(config, rulebook, rulebook_path, source_dir, golden_rows)`가
+`BENCHMARK_DOC_IDS`(또는 `--doc-ids`로 지정한 목록)를 순회하며 문서마다 **새
+`LLMClient` 쌍**을 만들어(`build_clients` 콜백, 기본은 `build_llm_client` 두 번 호출 —
+문서 간에 재사용하면 토큰/호출수 통계가 뒤섞임) `review_document()`를 돌리고, 결과를
+`score_issues()`로 채점한다. 문서별 `RunStats`+`ScoreResult`를 모아 `ExperimentSummary`
+(전체 시간/토큰 합, `by_stage`/`by_tier`/`by_rule` 합산, `merge_score_results()`로 합친
+benchmark-wide 점수)를 만든다. `write_experiment_report()`가 문서마다
+`outputs/experiments/<profile>/<timestamp>/<doc_id>/review.{json,md}`(기존
+`diff_report.write_report`와 같은 포맷)를 쓰고, 루트에 `summary.json`/`summary.md`(카테고리별
+recall/precision 표 + 문서별 지적건수 표)를 남긴다. CLI:
+
+```bash
+uv run planqa-review experiment \
+  --profile gemini_lite --backend gemini \
+  --screen-model gemini-flash-lite-latest --verify-model gemini-3.5-flash-lite
+# → outputs/experiments/gemini_lite/<timestamp>/{DOC-003,...,DOC-016}/review.{json,md},
+#   summary.json, summary.md
+```
+
+`--doc-ids`로 벤치마크 세트를 임시로 좁히거나(`--doc-ids DOC-003 DOC-004`), `--temperature`로
+다양성을 올려볼 수 있다. `--profile`/`--backend`/`--screen-model`/`--verify-model`을 바꿔가며
+같은 벤치마크 세트를 여러 번 돌리고 `summary.json`끼리 비교하는 게 이 인프라의 목적이다.
+
 ## eval-agent와의 관계
 
 이 저장소는 검토 에이전트(`review-agent/`)와 평가 에이전트(`eval-agent/`)를 각자 독립된
@@ -266,6 +347,11 @@ Gemini처럼 백엔드 자체를 다르게 가져갈 수도 있다(`llm/factory.
     코드페이지일 때 `UnicodeEncodeError`로 죽었다 (검토 자체는 끝나고 파일도 다 쓴 뒤 마지막
     출력 한 줄에서만 발생). `main()` 시작에 `sys.stdout.reconfigure(encoding="utf-8")`을
     추가해 수정.
+- **Ablation 측정 인프라 완성** (2026-08-06) — `instrumentation.py`/`scoring.py`/
+  `benchmark.py`/`experiment.py` 신규, `run_stats.py`/`diff_report.py`/`cli.py` 확장.
+  전체 테스트 83개 통과(신규 24개: scoring 14 + benchmark 6 + experiment 4). 이 인프라
+  자체는 아직 실제 LLM으로 벤치마크 세트 11개 문서를 돌려보진 않았다 — 다음 세션에서 실제
+  실행으로 recall/precision 기준선을 잡는 게 남음.
 
 ## 알려진 제약 / 확장 포인트
 
