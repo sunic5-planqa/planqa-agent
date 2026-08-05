@@ -46,6 +46,8 @@ class ExperimentSummary:
     backend: str
     screen_model: str
     verify_model: str
+    temperature: float
+    rulebook_hash: str
     total_wall_seconds: float
     screen: ModelUsage
     confirm: ModelUsage
@@ -77,7 +79,7 @@ def _merge_usage_maps(usage_maps: list[dict[str, ModelUsage]]) -> dict[str, Mode
     return merged
 
 
-def _summarize(documents: tuple[DocumentRun, ...], total_wall_seconds: float) -> ExperimentSummary:
+def _summarize(documents: tuple[DocumentRun, ...], temperature: float, total_wall_seconds: float) -> ExperimentSummary:
     first_stats = documents[0].stats
     screen_total = ModelUsage(call_count=0, elapsed_seconds=0.0, total_tokens=None)
     confirm_total = ModelUsage(call_count=0, elapsed_seconds=0.0, total_tokens=None)
@@ -90,6 +92,8 @@ def _summarize(documents: tuple[DocumentRun, ...], total_wall_seconds: float) ->
         backend=first_stats.backend,
         screen_model=first_stats.screen_model,
         verify_model=first_stats.verify_model,
+        temperature=temperature,
+        rulebook_hash=first_stats.rulebook_hash,
         total_wall_seconds=total_wall_seconds,
         screen=screen_total,
         confirm=confirm_total,
@@ -142,7 +146,7 @@ def run_experiment(
         score = score_issues(doc_id, result.issues, golden_rows)
         documents.append(DocumentRun(doc_id=doc_id, result=result, stats=stats, score=score))
 
-    summary = _summarize(tuple(documents), time.perf_counter() - experiment_start)
+    summary = _summarize(tuple(documents), config.temperature, time.perf_counter() - experiment_start)
     return ExperimentResult(config=config, documents=tuple(documents), summary=summary)
 
 
@@ -178,6 +182,8 @@ def _summary_dict(summary: ExperimentSummary) -> dict:
         "backend": summary.backend,
         "screen_model": summary.screen_model,
         "verify_model": summary.verify_model,
+        "temperature": summary.temperature,
+        "rulebook_hash": summary.rulebook_hash,
         "total_wall_seconds": round(summary.total_wall_seconds, 2),
         "screen": _usage_dict(summary.screen),
         "confirm": _usage_dict(summary.confirm),
@@ -198,7 +204,8 @@ def summary_markdown(experiment: ExperimentResult) -> str:
     lines = [
         f"# 실험 결과 — profile `{summary.profile}` / backend `{summary.backend}`",
         "",
-        f"- 스크리닝 모델: `{summary.screen_model}` / 정밀판정 모델: `{summary.verify_model}`",
+        f"- 스크리닝 모델: `{summary.screen_model}` / 정밀판정 모델: `{summary.verify_model}` / temperature: `{summary.temperature}`",
+        f"- 룰북 해시: `{summary.rulebook_hash}`",
         f"- 문서 {len(experiment.documents)}건, 총 소요 시간 {summary.total_wall_seconds:.1f}초",
         f"- 전체 recall: {_percent(score.recall)} ({score.true_positives}/{score.true_positives + score.false_negatives}), "
         f"precision: {_percent(score.precision)} ({score.true_positives}/{score.true_positives + score.false_positives})",

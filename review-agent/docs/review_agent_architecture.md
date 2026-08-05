@@ -261,7 +261,12 @@ DOC-000(실제 원문 없음)과 DOC-021~040(팀원이 만든 합성 문서, 룰
 문서 간에 재사용하면 토큰/호출수 통계가 뒤섞임) `review_document()`를 돌리고, 결과를
 `score_issues()`로 채점한다. 문서별 `RunStats`+`ScoreResult`를 모아 `ExperimentSummary`
 (전체 시간/토큰 합, `by_stage`/`by_tier`/`by_rule` 합산, `merge_score_results()`로 합친
-benchmark-wide 점수)를 만든다. `write_experiment_report()`가 문서마다
+benchmark-wide 점수)를 만든다. `ExperimentSummary`는 이 실행에 쓰인 `temperature`와
+`rulebook_hash`도 같이 담는다 — 나중에 `summary.json` 여러 개(모델/temperature를 바꿔 여러 번
+돌린 결과)를 놓고 비교할 때, 어떤 조합으로 나온 결과인지 폴더 타임스탬프가 아니라 파일 내용
+자체로 알 수 있어야 하기 때문이다(**단, 여러 `summary.json`을 실제로 나란히 대조/집계해주는
+기능은 아직 없다** — 지금은 한 조합당 한 번 실행해서 자기 완결적인 결과 하나를 남기는 것까지만
+범위. 비교 자체는 나중에 별도로 설계하기로 함). `write_experiment_report()`가 문서마다
 `outputs/experiments/<profile>/<timestamp>/<doc_id>/review.{json,md}`(기존
 `diff_report.write_report`와 같은 포맷)를 쓰고, 루트에 `summary.json`/`summary.md`(카테고리별
 recall/precision 표 + 문서별 지적건수 표)를 남긴다. CLI:

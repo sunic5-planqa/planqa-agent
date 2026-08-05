@@ -2,8 +2,15 @@ from __future__ import annotations
 
 from conftest import ScriptedLLM
 
-from planqa_review.experiment import ExperimentConfig, run_experiment, summary_markdown, write_experiment_report
+from planqa_review.experiment import (
+    ExperimentConfig,
+    _summary_dict,
+    run_experiment,
+    summary_markdown,
+    write_experiment_report,
+)
 from planqa_review.rulebook import parse_rulebook
+from planqa_review.run_stats import hash_rulebook
 from planqa_review.scoring import GoldenRow
 
 _DOC = "# 샘플 PRD\n\n## 1. 목적\n\n간단한 목적 설명입니다.\n"
@@ -96,6 +103,27 @@ def test_summary_markdown_includes_recall_and_per_document_table(tmp_path, ruleb
     assert "DOC-A" in markdown
     assert "recall" in markdown.lower()
     assert "MI" in markdown  # by-category table includes the MI category row
+
+
+def test_summary_records_temperature_and_rulebook_hash_for_cross_run_comparison(tmp_path, rulebook_path):
+    """A later comparison across multiple experiment runs (different model/temperature)
+    needs each run's own summary.json to say which config produced it — the output folder
+    timestamp alone isn't machine-readable content."""
+    (tmp_path / "DOC-A_test.md").write_text(_DOC, encoding="utf-8")
+    rulebook = parse_rulebook(rulebook_path)
+    config = ExperimentConfig(profile="gemini_lite", doc_ids=("DOC-A",), temperature=0.7)
+    build_clients = _make_build_clients([_client_pair("수정 A")])
+
+    experiment = run_experiment(config, rulebook, rulebook_path, tmp_path, [], build_clients=build_clients)
+
+    assert experiment.summary.temperature == 0.7
+    assert experiment.summary.rulebook_hash == hash_rulebook(rulebook_path)
+    summary_dict = _summary_dict(experiment.summary)
+    assert summary_dict["temperature"] == 0.7
+    assert summary_dict["rulebook_hash"] == hash_rulebook(rulebook_path)
+    markdown = summary_markdown(experiment)
+    assert "0.7" in markdown
+    assert hash_rulebook(rulebook_path) in markdown
 
 
 def test_write_experiment_report_writes_per_doc_and_summary_files(tmp_path, rulebook_path):

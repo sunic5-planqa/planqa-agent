@@ -573,3 +573,36 @@ tested, no network/API key needed to verify it.
 - eval-agent may be run live now (teammate approved) but only after this repo's own
   measurement work is done — that's now true, but running it wasn't asked for in this
   session and hasn't been done.
+
+## 2026-08-06 (correction) — Scope check on the ablation infra, one gap fixed
+
+User pushback: the ask was time/token measurement for ablation, not "build an accuracy
+evaluation system" — accuracy is the teammate's separate eval-agent's job, run by hand
+against this repo's `review.json` outputs. Clarified `scoring.py` isn't scope creep to
+delete, though — the user may still want to compare their own review-agent-side accuracy
+against the teammate's eval-agent numbers later, so it stays as-is.
+
+Asked the user to confirm two things against their actual two goals (per-rule time/
+accuracy-tradeoff visibility; ablation-style comparison of internal control variables):
+
+1. **Gap found and fixed**: `ExperimentSummary`/`summary.json` didn't record `temperature`
+   or `rulebook_hash` — two of the "control variables" being ablated, yet a saved
+   `summary.json` couldn't say which values produced it (only the output folder's
+   timestamp could, and that's not machine-readable). Added both fields to
+   `ExperimentSummary`, `_summary_dict()`, and the markdown header. One new test
+   (`test_summary_records_temperature_and_rulebook_hash_for_cross_run_comparison`).
+2. **Gap found, deliberately deferred**: nothing yet aggregates multiple `summary.json`
+   runs (different model/temperature combos) into one side-by-side comparison/ablation
+   table — today each `planqa-review experiment` invocation produces one self-contained
+   result; comparing configs means opening multiple `summary.json` files by hand. User
+   chose to stop at measurement for now and design the comparison feature separately once
+   there's a clearer idea of what the comparison view should look like.
+
+Full suite: 84 passed (+1 from the temperature/rulebook_hash test).
+
+### Next
+
+- Same as the previous entry's "Next" — plus, whenever the comparison/ablation-table
+  feature above gets picked up, it can lean on `summary.json`'s now-complete
+  self-description (profile/backend/screen_model/verify_model/temperature/rulebook_hash)
+  to know which file is which without parsing folder names.
