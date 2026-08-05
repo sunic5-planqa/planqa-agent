@@ -606,3 +606,31 @@ Full suite: 84 passed (+1 from the temperature/rulebook_hash test).
   feature above gets picked up, it can lean on `summary.json`'s now-complete
   self-description (profile/backend/screen_model/verify_model/temperature/rulebook_hash)
   to know which file is which without parsing folder names.
+
+
+지금까지 승인받은 계획을 다시 정리해서 설명드릴게요.
+
+대상 7개 구조
+
+제안5 (baseline) — 지금 이미 완성된 gemini_lite. tier 기준 그룹핑 + tool-calling 없음. 새로 안 만들고 나머지 비교 기준점으로만 씀.
+셀1 (방안1×1안) — 문단 단위로 청킹, 문단마다 카테고리 8개를 각각 독립 호출로 검토
+셀2 (방안1×2안) — 문단 단위 청킹 + 카테고리별 서브에이전트가 룰 단위 Tool까지 씀
+셀3 (방안2×1안) — 지금 tier 청킹 그대로, 카테고리별로 독립된 호출 병렬 실행
+셀4 (방안2×2안) — 지금 tier 청킹 그대로 + 룰 단위 서브에이전트 tool-calling
+제안6 (Generator-Critic) — confirm 이후에 비판적으로 재검토하는 단계 하나 추가 (새 구조 아님, 기존 구조에 얹는 보강)
+제안7 (Chain-of-Verification) — 판정을 하위질문 체인으로 쪼개서 검증 (역시 얹는 보강, 새 프로필 하나로 해결)
+만들기 전 공통 선행 작업 (한 번만)
+
+GeminiClient에 tool-calling 메서드 추가 (google-genai SDK에 이미 지원 있음, 새 패키지 필요 없음)
+experiment.py가 지금 baseline 구조에 고정돼 있어서, 어떤 구조든 꽂을 수 있게 일반화 + cli.py에 --structure 플래그 추가
+만드는 순서: 셀3 → 셀4 → 셀1 → 셀2 → 제안6 → 제안7
+
+셀3이 제일 쌈: 청킹은 그대로 쓰고 카테고리별로 호출만 쪼갬(진짜 tool-calling도 필요 없고 그냥 병렬 호출로 충분)
+셀4는 셀3에 룰 단위 tool만 얹음
+셀1은 문단 청킹을 새로 짜야 해서 더 복잡, 셀2는 문단 청킹+룰 단위까지 다 필요해서 제일 나중
+제안6/7은 어느 구조든 위에 얹는 거라 마지막
+각 구조 만들 때마다: 독립 모듈로 구현 → ScriptedLLM으로 테스트 → 문서 12개 실제 API로 스모크 테스트(비용 확인) → 통과하면 벤치마크 DOC-001020 전체로 experiment 실행 → review.json은 팀원 eval-agent에 넣어서 정확도 확인(우리 쪽은 시간/토큰만 잼).
+
+주의할 점: 룰 단위(셀2/4)는 호출 수가 크게 늘 수 있어서 전체 20개 문서 돌리기 전에 꼭 12개로 먼저 확인. Ollama는 tool-calling 검증 안 됐어서 셀14는 일단 Gemini 전용.
+
+지금 셀3 이전 공통 선행 작업(1번, tool-calling 메서드)부터 다시 이어가면 될까요?
