@@ -634,3 +634,41 @@ experiment.py가 지금 baseline 구조에 고정돼 있어서, 어떤 구조든
 주의할 점: 룰 단위(셀2/4)는 호출 수가 크게 늘 수 있어서 전체 20개 문서 돌리기 전에 꼭 12개로 먼저 확인. Ollama는 tool-calling 검증 안 됐어서 셀14는 일단 Gemini 전용.
 
 지금 셀3 이전 공통 선행 작업(1번, tool-calling 메서드)부터 다시 이어가면 될까요?
+
+## 2026-08-06 (continued) — Fixed a stale TIER_CATEGORIES bug found while reviewing before Cell 3
+
+While reviewing the codebase ahead of starting the Cell 3 structure work above (not started
+yet), diffed `tiers.py`'s hand-transcribed `TIER_CATEGORIES` against the current rulebook
+file's actual §2 table and found it badly out of sync — almost certainly stale from before
+the 2026-08-05 40→41-rule rulebook refresh, despite the file's own comment saying to keep it
+in sync. Confirmed by extracting §2's category order programmatically from the rulebook's `##`
+headings (`LG, LF, TC, TM, AE, MI, RD, GA`) and cross-referencing each tier row:
+
+| 위계 | 이전 (틀림) | 수정 후 (룰북 §2) |
+|---|---|---|
+| 문서 | LG,LF,TC,MI,RD,GA (6개, TM 누락) | LG,LF,TC,TM,MI,RD,GA (7개) |
+| 논리단위 | LG,LF,TM,AE,MI (5개, TC/RD/GA 누락) | LG,LF,TC,TM,AE,MI,RD,GA (8개, 전체) |
+| 문단 | TM,MI (2개, LG/LF/TC/AE/RD 누락) | LG,LF,TC,TM,AE,MI,RD (7개) |
+| 문장 | TM,AE (2개, LG/TC/MI 누락) | LG,TC,TM,AE,MI (5개) |
+
+Every past review run (including all `gemini_lite`/제안5 baseline numbers logged above) was
+checking far fewer categories per tier than the rulebook actually specifies — worst at
+Paragraph tier, 2 of 7 required categories. Fixed `TIER_CATEGORIES` in place; no other
+production code needed to change (`rules_for_tier()` and every caller derive purely from this
+dict, no hardcoded category assumptions elsewhere). Added
+`test_tier_categories_matches_rulebook_section_2` to `tests/test_tiers.py` to pin the fix.
+Existing tests were all internal-consistency checks (didn't pin specific values), so nothing
+else needed updating. Full suite: 85 passed (+1).
+
+Sandbox note: no `.venv` existed this session (fresh checkout); rebuilt one with system
+`python` (3.13, found via `where python`) + `pip install -e . pytest` — worked fine despite an
+initial transient DNS failure on the first attempt.
+
+### Next
+
+- Re-run any past baseline numbers if/when they matter again — they were produced against the
+  stale mapping and will look different (more issues, esp. at Paragraph/Sentence tier) next
+  time `gemini_lite` runs live.
+- Resume the Cell 3 structure work per the checkpoint above: still deciding whether to build
+  GeminiClient's tool-calling method now (originally-approved order) or defer it to when Cell 4
+  actually needs a concrete tool schema — not yet decided.

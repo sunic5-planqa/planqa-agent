@@ -12,10 +12,10 @@ from planqa_review.schema import Level
 # Word tier (5차) has no categories/input unit listed in §2 yet, so it's intentionally
 # excluded from review — see docs/review_agent_architecture.md "확장 포인트".
 TIER_CATEGORIES: dict[Level, tuple[str, ...]] = {
-    Level.DOCUMENT: ("LG", "LF", "TC", "MI", "RD", "GA"),
-    Level.LOGICAL_UNIT: ("LG", "LF", "TM", "AE", "MI"),
-    Level.PARAGRAPH: ("TM", "MI"),
-    Level.SENTENCE: ("TM", "AE"),
+    Level.DOCUMENT: ("LG", "LF", "TC", "TM", "MI", "RD", "GA"),
+    Level.LOGICAL_UNIT: ("LG", "LF", "TC", "TM", "AE", "MI", "RD", "GA"),
+    Level.PARAGRAPH: ("LG", "LF", "TC", "TM", "AE", "MI", "RD"),
+    Level.SENTENCE: ("LG", "TC", "TM", "AE", "MI"),
 }
 
 # Review call order — coarse-to-fine, matching the 1차~4차 sequence in §2.
