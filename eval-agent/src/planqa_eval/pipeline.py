@@ -30,9 +30,9 @@ def run_pipeline(
     *,
     judge_assembly: JudgeAssembly | None = None,
 ) -> PipelineResult:
-    """The one function every prediction source runs through — the review agent's output,
-    each human Review1-4 baseline, and the 2-1 confidence-gate sample all call this the
-    same way, so Aggregator's comparisons are apples-to-apples.
+    """The one function every prediction source runs through — the review agent's output and
+    each human Review1-4 baseline all call this the same way, so Aggregator's comparisons are
+    apples-to-apples.
 
     judge_assembly swaps the single-LLM judge/triage calls for the LLM-as-judge ensemble
     (judge_matches_ensemble/triage_candidates_ensemble) — llm doubles as the arbiter for
