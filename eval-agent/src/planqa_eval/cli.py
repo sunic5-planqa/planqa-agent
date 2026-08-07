@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from planqa_eval.ensemble import JudgeAssembly
 from planqa_eval.harness.full_eval import run_full_evaluation
 from planqa_eval.llm.factory import build_llm_client
-from planqa_eval.parsers.review_json import parse_review_output
+from planqa_eval.parsers.review_json import parse_review_output, parse_review_stats
 from planqa_eval.reporter import write_report
 from planqa_eval.rulebook import parse_rulebook
 
@@ -39,6 +39,7 @@ def _parse_judge_ensemble(spec: str | None) -> JudgeAssembly | None:
 def cmd_evaluate(args: argparse.Namespace) -> int:
     rulebook = parse_rulebook(args.rulebook)
     predicted = parse_review_output(args.predictions)
+    review_stats = parse_review_stats(args.predictions)
     llm = build_llm_client(args.backend)
     judge_assembly = _parse_judge_ensemble(args.judge_ensemble)
 
@@ -47,7 +48,7 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     )
 
     out_dir = Path("outputs/eval") / _timestamp()
-    json_path, md_path = write_report(out_dir, result, report, comparison)
+    json_path, md_path = write_report(out_dir, result, report, comparison, review_stats=review_stats)
     print(f"Wrote {json_path} and {md_path}")
     print(f"Overall recall={report.overall.recall} precision={report.overall.precision}")
     return 0

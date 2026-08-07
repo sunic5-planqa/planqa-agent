@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -36,4 +37,22 @@ class ScriptedLLM(LLMClient):
 
     def complete_json(self, *, system: str, prompt: str) -> Any:
         self.calls.append({"system": system, "prompt": prompt})
+        return next(self._responses)
+
+
+class BrokenBatchLLM(LLMClient):
+    """First call raises json.JSONDecodeError (simulating a small local model garbling a
+    large batch response), every call after that returns the next scripted reply — lets
+    tests verify batch-then-per-item fallback survives a totally unparseable batch response,
+    not just one with a missing index."""
+
+    def __init__(self, responses: list[Any]) -> None:
+        self.model = "broken-batch"
+        self._responses = iter(responses)
+        self.calls: list[dict[str, str]] = []
+
+    def complete_json(self, *, system: str, prompt: str) -> Any:
+        self.calls.append({"system": system, "prompt": prompt})
+        if len(self.calls) == 1:
+            raise json.JSONDecodeError("simulated garbled batch response", "", 0)
         return next(self._responses)

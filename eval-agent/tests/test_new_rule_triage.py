@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from conftest import ScriptedLLM
+from conftest import BrokenBatchLLM, ScriptedLLM
 
 from planqa_eval.new_rule_triage import triage_ensemble, triage_fp_candidates
 from planqa_eval.rulebook import parse_rulebook
@@ -58,6 +58,20 @@ def test_triage_falls_back_per_item_when_batch_response_is_missing_an_index(rule
     results = triage_fp_candidates(candidates, rulebook, llm)
     assert len(llm.calls) == 2
     assert [r.verdict for r in results] == ["false_positive", "human_review"]
+
+
+def test_triage_falls_back_per_item_when_batch_response_is_not_valid_json(rulebook_path):
+    rulebook = parse_rulebook(rulebook_path)
+    candidates = [_issue(), _issue()]
+    llm = BrokenBatchLLM(
+        [
+            {"verdict": "false_positive", "reasoning": "r0"},
+            {"verdict": "new_rule_candidate", "reasoning": "r1"},
+        ]
+    )
+    results = triage_fp_candidates(candidates, rulebook, llm)
+    assert len(llm.calls) == 3  # 1 failed batch attempt + 2 individual fallback calls
+    assert [r.verdict for r in results] == ["false_positive", "new_rule_candidate"]
 
 
 def test_triage_ensemble_majority_wins_with_no_ambiguity(rulebook_path):

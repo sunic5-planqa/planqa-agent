@@ -64,7 +64,10 @@ def _documents(result: PipelineResult) -> dict[str, dict[str, list[dict[str, Any
 
 
 def to_json_dict(
-    result: PipelineResult, report: AggregateReport, baseline: BaselineComparison | None = None
+    result: PipelineResult,
+    report: AggregateReport,
+    baseline: BaselineComparison | None = None,
+    review_stats: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "summary": {
@@ -88,6 +91,7 @@ def to_json_dict(
             if baseline
             else None
         ),
+        "review_agent_stats": review_stats,
         "documents": _documents(result),
     }
 
@@ -103,8 +107,38 @@ def _counts_table_row(label: str, counts: ConfusionCounts) -> str:
     )
 
 
+def _usage_table_row(label: str, usage: dict[str, Any]) -> str:
+    tokens = usage.get("total_tokens")
+    return f"| {label} | {usage.get('call_count', '—')} | {usage.get('elapsed_seconds', '—')} | {tokens if tokens is not None else '—'} |"
+
+
+def _review_stats_section(review_stats: dict[str, Any] | None) -> list[str]:
+    # Pass-through display only — review-agent measured this, eval-agent just surfaces it
+    # next to the quality numbers so the two don't live in separate files.
+    if not review_stats:
+        return []
+    lines = [
+        "## Review Agent Run Cost",
+        "",
+        f"- profile={review_stats.get('profile')} backend={review_stats.get('backend')} "
+        f"screen_model={review_stats.get('screen_model')} verify_model={review_stats.get('verify_model')} "
+        f"rulebook_hash={review_stats.get('rulebook_hash')}",
+        f"- total_wall_seconds={review_stats.get('total_wall_seconds')}",
+        "",
+        "| Stage | Calls | Elapsed (s) | Tokens |",
+        "|---|---|---|---|",
+    ]
+    for stage, usage in sorted(review_stats.get("by_stage", {}).items()):
+        lines.append(_usage_table_row(stage, usage))
+    lines += ["", "Per-tier/per-rule cost breakdown is in report.json's `review_agent_stats`.", ""]
+    return lines
+
+
 def to_markdown(
-    result: PipelineResult, report: AggregateReport, baseline: BaselineComparison | None = None
+    result: PipelineResult,
+    report: AggregateReport,
+    baseline: BaselineComparison | None = None,
+    review_stats: dict[str, Any] | None = None,
 ) -> str:
     lines = ["# PlanQA Evaluation Report", ""]
 
@@ -117,6 +151,7 @@ def to_markdown(
         f"- Excused misses (valid reference exception): {report.excused_miss_count}",
         "",
     ]
+    lines += _review_stats_section(review_stats)
 
     lines += [
         "## By Rule Category",
@@ -168,13 +203,14 @@ def write_report(
     result: PipelineResult,
     report: AggregateReport,
     baseline: BaselineComparison | None = None,
+    review_stats: dict[str, Any] | None = None,
 ) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "report.json"
     md_path = output_dir / "report.md"
     json_path.write_text(
-        json.dumps(to_json_dict(result, report, baseline), ensure_ascii=False, indent=2),
+        json.dumps(to_json_dict(result, report, baseline, review_stats), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    md_path.write_text(to_markdown(result, report, baseline), encoding="utf-8")
+    md_path.write_text(to_markdown(result, report, baseline, review_stats), encoding="utf-8")
     return json_path, md_path
