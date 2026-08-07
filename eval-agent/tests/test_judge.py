@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from conftest import ScriptedLLM
+from conftest import BrokenBatchLLM, ScriptedLLM
 
 from planqa_eval.judge import judge_match_ensemble, judge_matches
 from planqa_eval.schema import Issue
@@ -86,6 +86,15 @@ def test_judge_matches_falls_back_per_pair_when_batch_response_is_missing_an_ind
     assert len(llm.calls) == 2
     assert scores[0].average == 5.0
     assert scores[1].average == 1.0
+
+
+def test_judge_matches_falls_back_per_pair_when_batch_response_is_not_valid_json():
+    pairs = [(_issue(), _issue()), (_issue(), _issue())]
+    llm = BrokenBatchLLM([_score_response(3), _score_response(4)])
+    scores = judge_matches(pairs, llm)
+    assert len(llm.calls) == 3  # 1 failed batch attempt + 2 individual fallback calls
+    assert scores[0].average == 3.0
+    assert scores[1].average == 4.0
 
 
 def test_judge_match_ensemble_converges_when_judges_agree():

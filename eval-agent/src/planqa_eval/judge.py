@@ -91,11 +91,16 @@ def _build_batch_prompt(matched: list[tuple[Issue, Issue]]) -> str:
 def judge_matches(matched: list[tuple[Issue, Issue]], llm: LLMClient) -> list[JudgeScore]:
     """One LLM call for the whole batch instead of one per pair. If the model drops an
     index from its response (malformed/partial output), that single pair falls back to
-    judge_match() rather than failing the whole batch or silently guessing a score."""
+    judge_match() rather than failing the whole batch or silently guessing a score. If the
+    whole batch response isn't even valid JSON (small local models can truncate/garble a
+    large batch), every pair falls back the same way instead of the run crashing."""
     if not matched:
         return []
 
-    response = llm.complete_json(system=_BATCH_JUDGE_SYSTEM, prompt=_build_batch_prompt(matched))
+    try:
+        response = llm.complete_json(system=_BATCH_JUDGE_SYSTEM, prompt=_build_batch_prompt(matched))
+    except ValueError:
+        response = None
     raw_scores = response.get("scores", []) if isinstance(response, dict) else []
     by_index = {item["index"]: item for item in raw_scores if isinstance(item, dict) and "index" in item}
 

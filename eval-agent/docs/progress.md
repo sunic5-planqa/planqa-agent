@@ -396,3 +396,41 @@ eval-agent doesn't need a second copy of it.
   correctly against the *actual* `by_stage` shape (this session validated against the
   structure confirmed in review-agent's `diff_report.py`, not a live file — the earlier
   worktree that had one was already cleaned up).
+
+## 2026-08-08 — Harden judge_matches/triage_fp_candidates against unparseable batch JSON
+
+A real local run (`--backend ollama qwen2.5:1.5b`, `evaluate` against
+`data/sample_review_output.json`) crashed the whole run: Review1's 56-issue judge batch came
+back as invalid JSON from qwen2.5:1.5b (small models can truncate/garble a large batched
+response), and `llm.complete_json()`'s `json.JSONDecodeError` propagated straight up —
+`judge_matches()`'s existing "missing index falls back to a single call" logic never got a
+chance to run, since that only handles a *parseable* response with a *missing* index, not a
+response that fails to parse at all.
+
+### Done
+
+- `judge_matches()` / `triage_fp_candidates()`: the initial batch `complete_json()` call is
+  now wrapped in `try/except ValueError` (`json.JSONDecodeError` is a `ValueError` subclass —
+  no new import needed). On failure, `response = None`, which flows into the existing
+  `by_index = {}` → every item falls back to an individual call, exactly like a partially
+  malformed response already did. No new failure-handling branch, just widened what triggers
+  the one that existed.
+- `tests/conftest.py`: added `BrokenBatchLLM` (raises `JSONDecodeError` on the first call,
+  scripted responses after) alongside `ScriptedLLM`, plus one test per function
+  (`test_judge.py`/`test_new_rule_triage.py`) asserting 1 failed batch call + N individual
+  fallback calls still produces correct results.
+- Verified against the actual failure, not just the unit tests: re-ran `run_pipeline` on
+  exactly Review1 (56 issues) with `qwen2.5:1.5b` directly (not through the full `evaluate`
+  command, which also runs the other 3 reviewers + the subject prediction — unnecessary cost
+  for confirming this specific fix) — completed with 25 judge scores + 31 triage results, no
+  crash, where it crashed outright before this fix.
+- 82/82 tests green.
+
+### Notes
+
+- Running the *full* `evaluate` locally (all 4 Review1-4 baselines + subject, all through
+  qwen) is genuinely slow — not just "local is slower than cloud" but the fallback itself
+  trading a single batch call for up to N individual calls whenever a batch fails to parse.
+  For any future "does X still work" check, prefer calling `run_pipeline` directly against
+  just the reviewer/dataset that matters, the way this session's verification script did,
+  rather than going through the full `evaluate` CLI path.

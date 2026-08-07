@@ -85,11 +85,16 @@ def triage_fp_candidates(
 ) -> list[TriageResult]:
     """One LLM call for the whole batch instead of one per candidate. If the model drops an
     index from its response, that single candidate falls back to triage_fp_candidate()
-    rather than failing the whole batch or silently guessing a verdict."""
+    rather than failing the whole batch or silently guessing a verdict. If the whole batch
+    response isn't even valid JSON (small local models can truncate/garble a large batch),
+    every candidate falls back the same way instead of the run crashing."""
     if not fp_candidates:
         return []
 
-    response = llm.complete_json(system=_BATCH_TRIAGE_SYSTEM, prompt=_build_batch_prompt(fp_candidates, rulebook))
+    try:
+        response = llm.complete_json(system=_BATCH_TRIAGE_SYSTEM, prompt=_build_batch_prompt(fp_candidates, rulebook))
+    except ValueError:
+        response = None
     raw = response.get("triage", []) if isinstance(response, dict) else []
     by_index = {item["index"]: item for item in raw if isinstance(item, dict) and "index" in item}
 
