@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
+from planqa_eval.ensemble import JudgeAssembly, majority_vote_categorical, run_ensemble
 from planqa_eval.llm.base import LLMClient
 from planqa_eval.rulebook import RuleBook
 from planqa_eval.schema import Issue
@@ -15,6 +16,7 @@ class TriageResult:
     predicted: Issue
     verdict: Verdict
     reasoning: str | None = None
+    ambiguous: bool = False
 
 _TRIAGE_CRITERIA = (
     '- "false_positive": the flagged rule genuinely does not apply here (the agent got it '
@@ -99,3 +101,42 @@ def triage_fp_candidates(
             continue
         results.append(_result_from(issue, values))
     return results
+
+
+def triage_ensemble(
+    issue: Issue,
+    rulebook: RuleBook,
+    assembly: JudgeAssembly,
+    arbiter: LLMClient | None = None,
+    consensus_min: float = 2 / 3,
+) -> TriageResult:
+    """SuperJudge-style orchestration for triage: each assembly member independently classifies
+    the candidate, majority verdict wins. Below consensus_min the verdict is ambiguous — with
+    an arbiter given, that candidate alone is re-triaged by the arbiter (Layer 3→4 escalation,
+    same policy as judge_match_ensemble)."""
+    results = run_ensemble(lambda llm: triage_fp_candidate(issue, rulebook, llm), assembly)
+    if not results:
+        raise RuntimeError("every judge in the ensemble failed")
+
+    verdicts = [result.verdict for _, result in results]
+    winner, consensus = majority_vote_categorical(verdicts)
+    ambiguous = consensus < consensus_min
+
+    if ambiguous and arbiter is not None:
+        return replace(triage_fp_candidate(issue, rulebook, arbiter), ambiguous=True)
+
+    reasoning = next((result.reasoning for _, result in results if result.verdict == winner), None)
+    return TriageResult(predicted=issue, verdict=winner, reasoning=reasoning, ambiguous=ambiguous)
+
+
+def triage_candidates_ensemble(
+    fp_candidates: list[Issue],
+    rulebook: RuleBook,
+    assembly: JudgeAssembly,
+    arbiter: LLMClient | None = None,
+    consensus_min: float = 2 / 3,
+) -> list[TriageResult]:
+    return [
+        triage_ensemble(issue, rulebook, assembly, arbiter=arbiter, consensus_min=consensus_min)
+        for issue in fp_candidates
+    ]

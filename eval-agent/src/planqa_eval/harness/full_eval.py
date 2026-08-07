@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from planqa_eval.aggregator import AggregateReport, BaselineComparison, aggregate, compare_to_human_baseline
+from planqa_eval.ensemble import JudgeAssembly
 from planqa_eval.llm.base import LLMClient
 from planqa_eval.parsers.golden import parse_golden_dataset
 from planqa_eval.parsers.review_sheet import parse_review_sheets
@@ -31,11 +32,18 @@ def run_full_evaluation(
     llm: LLMClient,
     gate_report_path: Path,
     force: bool = False,
+    judge_assembly: JudgeAssembly | None = None,
 ) -> tuple[PipelineResult, AggregateReport, BaselineComparison]:
     """2-2: only runs the full golden-set evaluation once the 2-1 gate has passed (or
     --force). Re-reads the golden dataset and Review1-6 sheets fresh — this is the point
     where the "no hardcoded document list" constraint actually gets exercised: as more
-    golden rows get confirmed, this picks them up with no code change."""
+    golden rows get confirmed, this picks them up with no code change.
+
+    judge_assembly, if given, only applies to the subject `predicted` run — not the Review1-4
+    baseline loop below. Aggregator never reads judge_scores (recall/precision only), so
+    ensembling the baselines' judge calls would just be 4x the cost for zero effect on any
+    number this function returns.
+    """
     if not force and not check_gate_passed(gate_report_path):
         raise GateNotPassedError(
             f"2-1 confidence gate has not passed (no passing report at {gate_report_path}). "
@@ -43,7 +51,7 @@ def run_full_evaluation(
         )
 
     golden = parse_golden_dataset(xlsx_path)
-    result = run_pipeline(golden, predicted, rulebook, source_dir, llm)
+    result = run_pipeline(golden, predicted, rulebook, source_dir, llm, judge_assembly=judge_assembly)
     report = aggregate(result)
 
     baselines: dict[str, AggregateReport] = {}

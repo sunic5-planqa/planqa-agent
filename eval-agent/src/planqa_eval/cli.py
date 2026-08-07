@@ -8,6 +8,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from planqa_eval.ensemble import JudgeAssembly
 from planqa_eval.harness.confidence_gate import (
     load_human_labels,
     run_confidence_gate,
@@ -30,12 +31,32 @@ def _timestamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _parse_judge_ensemble(spec: str | None) -> JudgeAssembly | None:
+    """--judge-ensemble takes `name:backend[:model]` entries, comma-separated — e.g.
+    "qwen:ollama:qwen2.5:1.5b,exaone:ollama:exaone3.5:2.4b,gemma:ollama:gemma2:2b"."""
+    if not spec:
+        return None
+    assembly: JudgeAssembly = []
+    for member in spec.split(","):
+        name, backend, *rest = member.split(":", 2)
+        model = rest[0] if rest else None
+        assembly.append((name, build_llm_client(backend, model)))
+    return assembly
+
+
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--xlsx", type=Path, default=DEFAULT_XLSX)
     parser.add_argument("--rulebook", type=Path, default=DEFAULT_RULEBOOK)
     parser.add_argument("--source-dir", type=Path, default=DEFAULT_SOURCE_DIR)
     parser.add_argument("--predictions", type=Path, required=True, help="review agent output JSON")
     parser.add_argument("--backend", default=None, help="overrides PLANQA_LLM_BACKEND (gemini|ollama)")
+    parser.add_argument(
+        "--judge-ensemble",
+        default=None,
+        help="LLM-as-judge orchestration: comma-separated name:backend[:model], e.g. "
+        "qwen:ollama:qwen2.5:1.5b,exaone:ollama:exaone3.5:2.4b,gemma:ollama:gemma2:2b "
+        "— --backend's LLM acts as the arbiter for pairs the ensemble can't agree on",
+    )
 
 
 def cmd_gate(args: argparse.Namespace) -> int:
@@ -56,7 +77,8 @@ def cmd_gate(args: argparse.Namespace) -> int:
 
     human_labels = load_human_labels(args.human_labels)
     llm = build_llm_client(args.backend)
-    report = run_confidence_gate(sample, predicted, human_labels, llm)
+    assembly = _parse_judge_ensemble(args.judge_ensemble)
+    report = run_confidence_gate(sample, predicted, human_labels, llm, assembly=assembly)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     report_path = out_dir / "gate_report.json"
@@ -68,6 +90,7 @@ def cmd_gate(args: argparse.Namespace) -> int:
                 "matcher_agreement": report.matcher_agreement,
                 "judge_agreement": report.judge_agreement,
                 "rule_level_accuracy": report.rule_level_accuracy,
+                "judge_prompt_hash": report.judge_prompt_hash,
                 "log": report.log,
             },
             ensure_ascii=False,
@@ -95,10 +118,18 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     predicted = parse_review_output(args.predictions)
     llm = build_llm_client(args.backend)
     gate_report_path = args.gate_report or _latest_gate_report()
+    judge_assembly = _parse_judge_ensemble(args.judge_ensemble)
 
     try:
         result, report, comparison = run_full_evaluation(
-            args.xlsx, predicted, rulebook, args.source_dir, llm, gate_report_path, force=args.force
+            args.xlsx,
+            predicted,
+            rulebook,
+            args.source_dir,
+            llm,
+            gate_report_path,
+            force=args.force,
+            judge_assembly=judge_assembly,
         )
     except GateNotPassedError as exc:
         print(str(exc), file=sys.stderr)

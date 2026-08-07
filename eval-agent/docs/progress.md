@@ -229,3 +229,102 @@ prior session's Next list.
   quick manual look — is DOC-001's actual LG-05 issue a genuine miss by the review agent, or is
   the golden dataset itself stale for DOC-001 relative to the current rulebook revision?
 - DOC-000 source text still missing (unchanged from 2026-08-05 rulebook-refresh entry above).
+
+## 2026-08-07 — LLM-as-judge ensemble orchestration for Judge/triage scoring
+
+Ported the orchestration pattern from `microsoft/llm-as-judge` (SuperJudge/Mediator: run
+several sub-judges in parallel, combine results) and the calibration utilities from
+`wenxuec/llm-judge` (`calibrate.py`'s `cohens_kappa`/`spearman`, `harness.py`'s
+`compute_rubric_hash()`) to make the 4-axis rubric scoring and FP-candidate triage more
+reliable than a single LLM call, per an internal team request.
+
+### Done
+
+- `ensemble.py` (new): `JudgeAssembly`, `run_ensemble()` (ThreadPoolExecutor version of
+  `asyncio.gather` — deliberately drops only the failing member instead of failing the whole
+  batch, since local models can time out/emit malformed JSON independently of each other),
+  `majority_vote_categorical()`, `aggregate_numeric()`.
+- `harness/calibration.py` (new): `cohens_kappa`/`spearman`/`is_numeric`/`compare_label_sets`,
+  ported near-verbatim from `calibrate.py`. Used as an internal QC diagnostic (how much do the
+  ensemble members agree with each other), not to validate against human labels.
+- `judge.py`/`new_rule_triage.py`: `JudgeScore`/`TriageResult` gained `ambiguous: bool = False`.
+  New `judge_match_ensemble()`/`triage_ensemble()` (+ batch wrappers) run every assembly member
+  in parallel and combine; when they disagree past a threshold (score stdev > 1.0, or triage
+  consensus < 2/3), `ambiguous=True` — and if an `arbiter` LLM is given, that one item alone
+  gets re-scored by the arbiter and its verdict wins (Layer 3→4 escalation: cheap ensemble for
+  everything, one strong-model call only for the genuinely disputed few).
+- `pipeline.py`/`harness/full_eval.py`: `run_pipeline`/`run_full_evaluation` take an optional
+  `judge_assembly` — when given, judge/triage go through the ensemble with the existing `llm`
+  doubling as arbiter. `full_eval.py` only applies it to the subject prediction run, not the
+  Review1-4 baseline loop (aggregator never reads judge scores, so ensembling baselines would
+  be pure wasted cost).
+- `harness/confidence_gate.py`: `run_confidence_gate()` takes the same optional `assembly` —
+  swaps the gate's single `judge_match` call for `judge_match_ensemble`, so the existing
+  human-blind-label gate can validate ensemble-scored judging too. Added `compute_rubric_hash()`
+  (ported from `harness.py`) on `GateReport.judge_prompt_hash`, and each log entry now carries
+  `ambiguous`.
+- `cli.py`: `--judge-ensemble` (comma-separated `name:backend[:model]`) on both `gate` and
+  `evaluate`; `--backend`'s LLM doubles as arbiter.
+- Ensemble composition (all local Ollama, no API key/quota cost): `qwen2.5:1.5b` (already
+  verified) + `exaone3.5:2.4b` (LG AI연구원, Korean-native — genuinely different training
+  lineage from Qwen, matters for `service_tone_fit`'s Korean-tone judgment) + `gemma2:2b`
+  (another distinct lineage). 3 is the practical floor for `majority_vote_categorical` to mean
+  anything — with 2, "majority" degenerates to plain agree/disagree.
+- 28 new tests (`test_ensemble.py`, `test_calibration.py`, ensemble cases added to
+  `test_judge.py`/`test_new_rule_triage.py`, new `test_pipeline.py`/`test_confidence_gate.py`).
+  75/75 passing.
+- Live end-to-end check against the real `review_agent_sample_output.json` (bypassing
+  `run_full_evaluation`'s Review1-4 baseline loop on purpose — that's all single-LLM Gemini
+  calls unrelated to the ensemble change and would just burn quota): all 6 FP candidates for
+  this sample hit real 3-way splits across the 3 local models (`ambiguous=True` for all 6) and
+  got escalated to the Gemini arbiter — consistent with the 2026-08-05 session's note that a
+  single Gemini call already found these particular DOC-001 AE-03/TC-02 candidates "mixed, not
+  dismissive." `matched pairs: 0` / `verified_misses: 131` reproduces the already-documented
+  single-doc coverage gap, not a regression.
+- Pulled `feature/review-agent` (real `planqa-review` implementation, previously never run in
+  this environment) into a throwaway worktree and actually ran it: `uv sync`, its own 84/84
+  tests green, then a real `planqa-review review` call against DOC-001 with the live Gemini
+  API — 30 issues found in 363s, valid `review.json`/`review.md`. Confirmed its output schema
+  matches `parse_review_output()` field-for-field with no adapter needed (`{"issues": [...]}`
+  wrapper, `issue_id`/`original_text`/`rationale`/`fix_direction` all present). Worktree removed
+  after verification — nothing committed to `feature/review-agent`, per team rule.
+- Quant eval (recall/precision) against that *real* DOC-001-only output: 0%/0% (TP=0, FN=131,
+  FP=1) — this reproduces the exact same single-document-coverage artifact the 2026-08-05
+  session already found with a synthetic sample (golden's real DOC-001 issue is LG-05; this
+  review-agent run's DOC-001 predictions are all AE-03/TC-02, a different rule category, so
+  Matcher correctly finds no overlap). Not a bug in either agent — just needs a multi-doc real
+  run to get a meaningful recall/precision number.
+- Live-confirmed the `judge_match_ensemble()` path itself (not just triage) with real matched
+  pairs, fully local (Matcher + all 3 ensemble judges + would-be arbiter all Ollama, zero Gemini
+  calls — see Notes below for why): ran against `data/sample_review_output.json` (20 predicted,
+  18 real matches). Result: 18/18 pairs scored, 8 flagged `ambiguous=True` (3-way score
+  stdev > 1.0), 10 converged confidently — a believable split, not every pair disagreeing and
+  not every pair trivially agreeing.
+
+### Notes
+
+- A first attempt at this session's disk got a real, unrelated blocker: the machine's APFS
+  Data volume was at 438MB free (of 228GB), which failed both `ollama pull`s with "no space
+  left on device." Cleared ~7.8GB via `pip cache purge` + `brew cleanup -s --prune=all` +
+  `npm cache clean --force` + `conda clean --all` before retrying — worth checking `df -h`
+  before any large local-model pull on this machine going forward.
+- Design detour worth remembering: the first pass at this feature over-rotated into "does the
+  ensemble's consensus agree with human blind labels enough to replace them" (a `kappa`/
+  `spearman`-gated `compare_against` mode on the confidence gate, with a dedicated
+  human-vs-ensemble comparison function). That's a legitimate question but wasn't what was
+  asked — the actual ask was "make the review agent's output get scored well," i.e. the
+  ensemble should improve the *production* Judge/triage mechanism, not sit in a separate
+  validation-only gate mode. Re-planned around that correction before implementing.
+- Gemini was noticeably unstable late on 2026-08-07 (one `503 UNAVAILABLE "high demand"`, plus
+  a Matcher call that stalled for 5+ minutes with no error and no retry-visible cause) —
+  unrelated to this feature, but cost real time chasing it before switching the verification
+  run's Matcher/arbiter to a local Ollama model instead, which resolved it immediately. Worth
+  remembering `--backend ollama` as the fallback when Gemini is flaky, not just when quota is
+  the concern.
+
+### Next
+
+- Real review-agent output across all 40 docs still the biggest open item — now that
+  `feature/review-agent` is confirmed to actually run, this is a real "run it 40 times" task,
+  not a blocked one. A multi-doc real run would also give a non-degenerate recall/precision
+  number (this session's real run only covered DOC-001, which has no golden overlap).

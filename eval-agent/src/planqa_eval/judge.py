@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+from planqa_eval.ensemble import JudgeAssembly, aggregate_numeric, run_ensemble
 from planqa_eval.llm.base import LLMClient
 from planqa_eval.schema import Issue
 
@@ -40,6 +41,7 @@ class JudgeScore:
     no_hallucination: int
     service_tone_fit: int
     actionability: int
+    ambiguous: bool = False
 
     @property
     def average(self) -> float:
@@ -107,3 +109,53 @@ def judge_matches(matched: list[tuple[Issue, Issue]], llm: LLMClient) -> list[Ju
         except (KeyError, TypeError, ValueError):
             scores.append(judge_match(golden, predicted, llm))
     return scores
+
+
+def judge_match_ensemble(
+    golden: Issue,
+    predicted: Issue,
+    assembly: JudgeAssembly,
+    arbiter: LLMClient | None = None,
+    score_stdev_threshold: float = 1.0,
+) -> JudgeScore:
+    """Runs judge_match() once per assembly member (SuperJudge-style orchestration, ported
+    from microsoft/llm-as-judge — see ensemble.run_ensemble) and folds the results into one
+    score: each axis becomes the rounded mean across judges. When the judges' overall averages
+    disagree past score_stdev_threshold, the pair is ambiguous — and if an arbiter is given,
+    that single pair gets re-scored by the arbiter alone and its verdict wins (Layer 3→4
+    escalation: cheap ensemble for everything, one strong-model call only for the disputed few).
+    """
+    results = run_ensemble(lambda llm: judge_match(golden, predicted, llm), assembly)
+    if not results:
+        raise RuntimeError("every judge in the ensemble failed")
+
+    scores = [score for _, score in results]
+    _, stdev = aggregate_numeric([score.average for score in scores])
+    ambiguous = stdev > score_stdev_threshold
+
+    if ambiguous and arbiter is not None:
+        return replace(judge_match(golden, predicted, arbiter), ambiguous=True)
+
+    def axis_mean(attr: str) -> int:
+        return round(sum(getattr(score, attr) for score in scores) / len(scores))
+
+    return replace(
+        scores[0],
+        root_cause_accuracy=axis_mean("root_cause_accuracy"),
+        no_hallucination=axis_mean("no_hallucination"),
+        service_tone_fit=axis_mean("service_tone_fit"),
+        actionability=axis_mean("actionability"),
+        ambiguous=ambiguous,
+    )
+
+
+def judge_matches_ensemble(
+    matched: list[tuple[Issue, Issue]],
+    assembly: JudgeAssembly,
+    arbiter: LLMClient | None = None,
+    score_stdev_threshold: float = 1.0,
+) -> list[JudgeScore]:
+    return [
+        judge_match_ensemble(golden, predicted, assembly, arbiter=arbiter, score_stdev_threshold=score_stdev_threshold)
+        for golden, predicted in matched
+    ]

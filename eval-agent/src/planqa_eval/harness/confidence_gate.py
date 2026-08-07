@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 from collections import defaultdict
@@ -7,12 +8,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from planqa_eval.judge import judge_match
+from planqa_eval.ensemble import JudgeAssembly
+from planqa_eval.judge import _BATCH_JUDGE_SYSTEM, _JUDGE_SYSTEM, judge_match, judge_match_ensemble
 from planqa_eval.llm.base import LLMClient
 from planqa_eval.matcher import match_all
+from planqa_eval.new_rule_triage import _TRIAGE_SYSTEM
 from planqa_eval.prefilter import category_of
 from planqa_eval.rulebook import RuleBook
 from planqa_eval.schema import Issue
+
+
+def compute_rubric_hash() -> str:
+    """Ported from wenxuec/llm-judge's harness.py — hash the fixed judge prompts so a report
+    records which prompt version produced it. Any prompt edit changes the hash."""
+    h = hashlib.sha256()
+    for prompt in (_JUDGE_SYSTEM, _BATCH_JUDGE_SYSTEM, _TRIAGE_SYSTEM):
+        h.update(b"||")
+        h.update(prompt.encode("utf-8"))
+    return h.hexdigest()[:16]
 
 
 def issue_key(issue: Issue) -> str:
@@ -124,6 +137,7 @@ class GateReport:
     judge_agreement: float
     rule_level_accuracy: float
     passed: bool
+    judge_prompt_hash: str | None = None
     log: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -132,8 +146,14 @@ def run_confidence_gate(
     predicted: list[Issue],
     human_labels: list[HumanBlindLabel],
     llm: LLMClient,
+    *,
+    assembly: JudgeAssembly | None = None,
     thresholds: GateThresholds = GateThresholds(),
 ) -> GateReport:
+    """assembly, if given, scores each matched pair with the LLM-as-judge ensemble
+    (judge_match_ensemble, llm as arbiter for disputed pairs) instead of a single judge_match
+    call — everything else about the human-agreement gate is unchanged, so this lets the same
+    gate validate ensemble-scored judging against the blind human labels."""
     human_by_key = {label.golden_issue_id: label for label in human_labels}
     match_result = match_all(sample, predicted, llm)
     matched_by_golden_key = {issue_key(golden): pred for golden, pred in match_result.matched}
@@ -166,8 +186,13 @@ def run_confidence_gate(
             rule_level_correct += int(
                 machine_match.rule_id == golden.rule_id and machine_match.level == golden.level
             )
-            score = judge_match(golden, machine_match, llm)
+            score = (
+                judge_match_ensemble(golden, machine_match, assembly, arbiter=llm)
+                if assembly is not None
+                else judge_match(golden, machine_match, llm)
+            )
             entry["judge_average"] = score.average
+            entry["ambiguous"] = score.ambiguous
             if human is not None and human.score_average is not None:
                 judge_total += 1
                 entry["human_score_average"] = human.score_average
@@ -190,5 +215,6 @@ def run_confidence_gate(
         judge_agreement=judge_agreement,
         rule_level_accuracy=rule_level_accuracy,
         passed=passed,
+        judge_prompt_hash=compute_rubric_hash(),
         log=log,
     )
