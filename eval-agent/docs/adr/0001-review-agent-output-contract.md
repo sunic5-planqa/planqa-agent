@@ -43,3 +43,9 @@
   landed at 0%/0% because the sample only covers DOC-001 (6 issues) against the full 131-row
   golden set — not a real quality signal, just a coverage mismatch worth knowing before
   reading any single-doc test run's numbers at face value.
+- Update (2026-08-08): the 2-1 confidence gate (`harness/confidence_gate.py`, human blind
+  labels) referenced above has been removed — see `docs/progress.md` 2026-08-07/08 entries.
+  Trust in the automated Judge is now established inline via LLM-as-judge ensemble
+  orchestration (`judge_match_ensemble`'s `ambiguous` flag + arbiter escalation) rather than a
+  separate pre-flight human-comparison gate. `issue_id` is still useful (Matcher/Judge/Reporter
+  all key by it) — just no longer for that gate specifically.

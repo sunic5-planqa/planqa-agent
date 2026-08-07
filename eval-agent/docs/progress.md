@@ -328,3 +328,36 @@ reliable than a single LLM call, per an internal team request.
   `feature/review-agent` is confirmed to actually run, this is a real "run it 40 times" task,
   not a blocked one. A multi-doc real run would also give a non-degenerate recall/precision
   number (this session's real run only covered DOC-001, which has no golden overlap).
+
+## 2026-08-08 — Removed the 2-1 human-blind-label confidence gate
+
+Now that the LLM-as-judge ensemble's `ambiguous` flag + arbiter escalation establishes trust
+in the automated Judge inline (previous entry), the separate human-blind-label gate that used
+to serve that role is redundant — removed per explicit request, not silently deprecated.
+
+### Done
+
+- Deleted `harness/confidence_gate.py` entirely: `HumanBlindLabel`, `GateThresholds`,
+  `GateReport`, `run_confidence_gate()`, `save_human_label_template()`/`load_human_labels()`,
+  `stratified_sample()`, `compute_rubric_hash()`. Deleted `tests/test_confidence_gate.py`.
+- `harness/full_eval.py`: dropped `GateNotPassedError`/`check_gate_passed()` and the
+  `gate_report_path`/`force` params — `run_full_evaluation()` now always runs, no prior gate
+  report required.
+- `cli.py`: removed the `gate` subcommand entirely (`cmd_gate`, `_latest_gate_report`,
+  `--human-labels`/`--sample-size`/`--gate-report`/`--force`). `evaluate` is now the only
+  subcommand; `--judge-ensemble` unchanged.
+- Updated `README.md`'s setup/run sections and `docs/adr/0001-...md` (appended an Update note
+  rather than rewriting history, per that doc's own established pattern) to drop gate
+  references.
+- **Left untouched, deliberately**: `aggregator.compare_to_human_baseline()` / the Review1-4
+  loop in `run_full_evaluation()`. That's a different "human" concept — benchmarking the
+  review agent's recall/precision against 4 human reviewers on the same golden set — not the
+  blind-label judge-validation mechanism this session removed. Flagged this scoping call back
+  to the user rather than assuming it should go too.
+- 73/73 tests green (75 − the 2 confidence-gate-specific tests that no longer exist), CLI
+  `--help` sanity-checked with the `gate` subcommand gone.
+
+### Next
+
+- If `compare_to_human_baseline`/Review1-4 should also go, that's a separate follow-up —
+  intentionally not assumed here.
