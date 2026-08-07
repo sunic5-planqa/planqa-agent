@@ -361,3 +361,38 @@ to serve that role is redundant — removed per explicit request, not silently d
 
 - If `compare_to_human_baseline`/Review1-4 should also go, that's a separate follow-up —
   intentionally not assumed here.
+
+## 2026-08-08 — Surface review-agent's cost stats in eval-agent's report
+
+review-agent already tracks time/token cost per run in real detail (`run_stats.py`/
+`instrumentation.py`: call counts, elapsed seconds, tokens, broken down by stage/tier/rule,
+plus `rulebook_hash`) and writes it into `review.json` under `"stats"` — its own `RunStats`
+docstring says this is meant to be compared "alongside recall/precision from the eval agent."
+eval-agent was silently dropping that key. Decision: keep the actual measurement in
+review-agent (only it has ground truth on its own call counts — eval-agent only ever sees the
+final output file) and have eval-agent's reporter just pass the data through next to its own
+quality numbers, rather than re-deriving anything. Dedicated cost/quality *ablation*
+experiments (comparing screen/verify model choices, temperature, profile) stay in
+review-agent's own `experiment`/`benchmark.py` — that's already built for exactly that and
+eval-agent doesn't need a second copy of it.
+
+### Done
+
+- `parsers/review_json.py`: `parse_review_stats(json_path) -> dict | None` reads
+  `review.json`'s `"stats"` key verbatim (`None` if absent or the file is a bare array).
+- `reporter.py`: `to_json_dict`/`to_markdown`/`write_report` take an optional `review_stats`
+  param. JSON gets a `review_agent_stats` key (raw pass-through, no reshaping — it's
+  review-agent's schema, not eval-agent's). Markdown gets a "## Review Agent Run Cost" section
+  (profile/backend/models/rulebook_hash/total_wall_seconds + a per-stage calls/elapsed/tokens
+  table) right after the summary, omitted entirely when `review_stats` is `None`.
+- `cli.py`'s `cmd_evaluate` reads `parse_review_stats(args.predictions)` from the same file
+  already used for `parse_review_output` and threads it into `write_report`.
+- New `tests/test_review_json.py` (3 tests) and `tests/test_reporter.py` (4 tests) — 80/80
+  passing overall.
+
+### Next
+
+- Once a real multi-doc review-agent run exists, sanity-check the markdown table renders
+  correctly against the *actual* `by_stage` shape (this session validated against the
+  structure confirmed in review-agent's `diff_report.py`, not a live file — the earlier
+  worktree that had one was already cleaned up).

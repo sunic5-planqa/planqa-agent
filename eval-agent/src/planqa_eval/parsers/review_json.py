@@ -37,3 +37,12 @@ def parse_review_output(json_path: Path) -> list[Issue]:
         )
         for item in items
     ]
+
+
+def parse_review_stats(json_path: Path) -> dict[str, Any] | None:
+    """review.json's optional {"stats": {...}} — review-agent's own cost profile for the run
+    (profile/backend/models/wall time/tokens, see review-agent's run_stats.py). Passed through
+    verbatim by reporter.py rather than re-derived, since only review-agent has ground truth
+    on its own call counts/tokens."""
+    data = json.loads(Path(json_path).read_text(encoding="utf-8"))
+    return data.get("stats") if isinstance(data, dict) else None
