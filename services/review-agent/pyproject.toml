@@ -1,0 +1,31 @@
+[project]
+name = "planqa-review"
+version = "0.1.0"
+description = "Rulebook-based document review agent — reviews a 기획서 against the PlanQA rulebook and outputs findings as an original-vs-suggested diff"
+readme = "README.md"
+authors = [
+    { name = "kayo2e", email = "gy3216@naver.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "python-dotenv>=1.0",
+    "httpx>=0.27",
+    "google-genai>=0.3",
+    "openpyxl>=3.1",
+    "planqa-schemas",
+]
+
+[project.scripts]
+planqa-review = "planqa_review.cli:main"
+
+[tool.uv.sources]
+planqa-schemas = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
