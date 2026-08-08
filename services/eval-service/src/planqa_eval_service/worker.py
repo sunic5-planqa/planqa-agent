@@ -17,8 +17,8 @@ _DEFAULT_RULEBOOK_PATH = Path(__file__).resolve().parent.parent.parent / "data" 
 
 
 def _parse_ensemble_spec(spec: str | None) -> JudgeAssembly | None:
-    """EVAL_SERVICE_ENSEMBLE: comma-separated name:backend[:model] — same format as
-    tools/eval-agent's --judge-ensemble, unset means tier-1-only (no escalation tier)."""
+    # EVAL_SERVICE_ENSEMBLE: comma-separated name:backend[:model] — same format as
+    # tools/eval-agent's --judge-ensemble. Unset means tier-1-only (no escalation tier).
     if not spec:
         return None
     assembly: JudgeAssembly = []
@@ -37,8 +37,8 @@ def process_pending(
     assembly: JudgeAssembly | None = None,
     arbiter: LLMClient | None = None,
 ) -> int:
-    """One poll tick — pulled out of run_worker's infinite loop so tests can call it
-    directly instead of racing a background thread."""
+    # One poll tick — pulled out of run_worker's infinite loop so tests can call it directly
+    # instead of racing a background thread.
     jobs = queue.dequeue_pending()
     for job in jobs:
         try:
@@ -59,9 +59,9 @@ def run_worker(
     arbiter: LLMClient | None = None,
     poll_interval: float = _POLL_INTERVAL_SECONDS,
 ) -> None:
-    """Runs forever — meant to be started as its own process, separate from the FastAPI
-    app's event loop, so a slow/stuck judge call never blocks /evaluate-async from
-    accepting new jobs."""
+    # Runs forever — meant to be started as its own process, separate from the FastAPI
+    # app's event loop, so a slow/stuck judge call never blocks /evaluate-async from
+    # accepting new jobs.
     while True:
         process_pending(queue, llm, rulebook, assembly=assembly, arbiter=arbiter)
         time.sleep(poll_interval)
@@ -73,7 +73,13 @@ def main() -> None:
     llm = build_llm_client(os.environ.get("EVAL_SERVICE_BACKEND"))
     assembly = _parse_ensemble_spec(os.environ.get("EVAL_SERVICE_ENSEMBLE"))
     # llm doubles as arbiter, same convention as tools/eval-agent's --judge-ensemble.
-    run_worker(SQLiteEvalQueue(db_path), llm, parse_rulebook(rulebook_path), assembly=assembly, arbiter=llm if assembly else None)
+    run_worker(
+        SQLiteEvalQueue(db_path),
+        llm,
+        parse_rulebook(rulebook_path),
+        assembly=assembly,
+        arbiter=llm if assembly else None,
+    )
 
 
 if __name__ == "__main__":

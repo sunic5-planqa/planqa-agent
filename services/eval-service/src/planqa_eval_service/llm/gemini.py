@@ -12,10 +12,9 @@ DEFAULT_MODEL = "gemini-2.5-flash"
 
 
 class GeminiClient(LLMClient):
-    """Single-key client — eval-service's audit traffic is a small fraction of what
-    review-agent itself sends, so the multi-key rotation review-agent/eval-agent need
-    isn't worth the complexity here yet. Revisit if quota becomes a real constraint."""
-
+    # Single-key — eval-service's audit traffic is a small fraction of what review-agent
+    # itself sends, so the multi-key rotation review-agent/eval-agent need isn't worth the
+    # complexity here yet. Revisit if quota becomes a real constraint.
     def __init__(self, model: str = DEFAULT_MODEL) -> None:
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:

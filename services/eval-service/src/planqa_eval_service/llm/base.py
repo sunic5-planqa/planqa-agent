@@ -11,10 +11,9 @@ _JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 class LLMClient(ABC):
     model: str
 
+    # Callers must instruct the model (in `prompt`/`system`) to respond with JSON only.
     @abstractmethod
-    def complete_json(self, *, system: str, prompt: str) -> Any:
-        """Sends `prompt` under `system` instructions and returns the parsed JSON response.
-        Callers must instruct the model (in `prompt`/`system`) to respond with JSON only."""
+    def complete_json(self, *, system: str, prompt: str) -> Any: ...
 
 
 def parse_json_response(text: str) -> Any:

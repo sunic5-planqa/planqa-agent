@@ -113,3 +113,22 @@
   - `eval-service` also gained its own minimal `llm/` (base/gemini/factory), deliberately
     cloud-only (no Ollama) — it has to keep up with review-agent's live request rate, unlike
     `eval-agent`'s offline benchmark runs where a laptop-local model is fine.
+
+- Update (2026-08-09): code review on the PR caught real bugs in the first pass, fixed here:
+  - `notify_eval_service()`'s daemon thread could be killed by `sys.exit()` before its POST
+    landed — `cmd_review` now joins the thread (bounded, 5s) after printing its summary, so
+    delivery is actually attempted rather than raced against interpreter shutdown.
+  - `judge.py`'s tier-1/tier-2 LLM calls only caught `ValueError` (malformed JSON) — a real
+    backend failure (network/rate-limit/API error, none of which are `ValueError`) crashed
+    the whole job instead of degrading to the same "trust confirm's judgment" fallback.
+    Widened to `except Exception`.
+  - `SQLiteEvalQueue`'s `with conn:` never actually closed the connection (only committed/
+    rolled back) — every call leaked a file descriptor. Fixed with an explicit
+    close-on-exit wrapper.
+  - `dequeue_pending()`'s SELECT-then-UPDATE wasn't atomic across processes (SQLite's
+    default deferred transaction only starts locking at the first write) — two worker
+    replicas polling the same db could double-pick-up a job. Now uses `BEGIN IMMEDIATE` to
+    take the write lock before the SELECT.
+  - `api.py`'s module-level `_queue = _default_queue()` created a real db file as an
+    import-time side effect. Made lazy (`_get_queue()`), still overridable by tests the same
+    way.

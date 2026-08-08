@@ -37,7 +37,10 @@ _TIER2_SYSTEM = (
 def _rule_block(rule: RuleDef | None, rule_id: str) -> str:
     if rule is None:
         return f"rule {rule_id}: (definition not found in bundled rulebook)"
-    return f"rule {rule.rule_id} ({rule.category_label}): {rule.text}\n  exception condition: {rule.exception_text or '없음'}"
+    return (
+        f"rule {rule.rule_id} ({rule.category_label}): {rule.text}\n"
+        f"  exception condition: {rule.exception_text or '없음'}"
+    )
 
 
 def _issue_block(index: int, issue: dict[str, Any], rulebook: RuleBook) -> str:
@@ -58,8 +61,11 @@ def _build_tier1_prompt(issues: list[dict[str, Any]], rulebook: RuleBook) -> str
 def _tier1_batch_check(issues: list[dict[str, Any]], rulebook: RuleBook, llm: LLMClient) -> list[dict[str, Any]]:
     try:
         response = llm.complete_json(system=_TIER1_SYSTEM, prompt=_build_tier1_prompt(issues, rulebook))
-    except ValueError:
-        response = None  # unparseable batch response — every item below falls back, not crashes
+    except Exception:
+        # Malformed JSON (ValueError) and backend failures (network/rate-limit/API errors,
+        # whatever shape the concrete LLMClient raises) both degrade the same way — every
+        # item below falls back to trusting confirm's judgment, the job doesn't crash.
+        response = None
 
     raw = response.get("verdicts", []) if isinstance(response, dict) else []
     by_index = {item["index"]: item for item in raw if isinstance(item, dict) and "index" in item}
@@ -94,7 +100,7 @@ def _tier2_single_check(issue: dict[str, Any], rule: RuleDef | None, llm: LLMCli
     )
     try:
         response = llm.complete_json(system=_TIER2_SYSTEM, prompt=prompt)
-    except ValueError:
+    except Exception:
         response = None
     if not isinstance(response, dict):
         return {"valid": True, "reason": "tier-2 response missing/malformed"}
@@ -102,7 +108,13 @@ def _tier2_single_check(issue: dict[str, Any], rule: RuleDef | None, llm: LLMCli
 
 
 def _verdict_entry(
-    issue: dict[str, Any], valid: bool, tier: str, reason: str | None, *, ambiguous: bool = False, consensus: float | None = None
+    issue: dict[str, Any],
+    valid: bool,
+    tier: str,
+    reason: str | None,
+    *,
+    ambiguous: bool = False,
+    consensus: float | None = None,
 ) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "issue_id": issue.get("issue_id"),
@@ -127,19 +139,15 @@ def judge_review_result(
     arbiter: LLMClient | None = None,
     consensus_min: float = 2 / 3,
 ) -> dict[str, Any]:
-    """LLM-cascade audit of review-agent's confirmed findings, reference-free (see
-    docs/adr/0001-... for why this can't reuse tools/eval-agent's golden-referenced Judge).
-
-    Tier 1 (cheap, one batched call over every finding): each finding gets checked once. Most
-    should come back 'confident' — those verdicts are final, no further cost spent.
-
-    Tier 2 (only for 'confident'-less findings, and only if `assembly` is given): every
-    member of the ensemble independently re-checks that one finding in parallel
-    (run_ensemble). If they agree past `consensus_min`, the majority verdict wins. If they
-    don't, and `arbiter` is given, the arbiter's single verdict wins instead and the entry is
-    flagged `ambiguous=True` — this is the RouteLLM/FrugalGPT-style cascade: cheap for the
-    easy majority, escalate only the genuinely uncertain minority, mirroring review-agent's
-    own screen→confirm cost structure one layer up."""
+    # LLM-cascade audit of review-agent's confirmed findings, reference-free (see
+    # docs/adr/0001-... for why this can't reuse tools/eval-agent's golden-referenced Judge).
+    # Tier 1 (cheap, one batched call over every finding) — most should come back
+    # 'confident', which is final, no further cost spent. Tier 2 (only for 'confident'-less
+    # findings, only if `assembly` is given) — every ensemble member independently re-checks
+    # that one finding in parallel; majority wins past `consensus_min`, otherwise `arbiter`
+    # decides and the entry is flagged `ambiguous=True`. RouteLLM/FrugalGPT-style cascade:
+    # cheap for the easy majority, escalate only the genuinely uncertain minority, mirroring
+    # review-agent's own screen→confirm cost structure one layer up.
     issues = review_result.get("issues", []) if isinstance(review_result, dict) else []
     if not issues:
         return {"issue_count": 0, "flagged_count": 0, "verdicts": []}
@@ -166,7 +174,9 @@ def judge_review_result(
             final = _tier2_single_check(issue, rule, arbiter)
             verdicts.append(_verdict_entry(issue, final["valid"], "arbiter", final.get("reason"), ambiguous=True))
         else:
-            verdicts.append(_verdict_entry(issue, winner == "valid", "ensemble", None, ambiguous=ambiguous, consensus=consensus))
+            verdicts.append(
+                _verdict_entry(issue, winner == "valid", "ensemble", None, ambiguous=ambiguous, consensus=consensus)
+            )
 
     flagged = [v for v in verdicts if not v["valid"]]
     return {"issue_count": len(issues), "flagged_count": len(flagged), "verdicts": verdicts}

@@ -12,9 +12,9 @@ JudgeAssembly = list[tuple[str, LLMClient]]
 
 
 def run_ensemble(fn: Callable[[LLMClient], T], assembly: JudgeAssembly) -> list[tuple[str, T]]:
-    """Same LLM-cascade shape as tools/eval-agent's ensemble.py (not imported — services
-    don't share business logic, only planqa-schemas). One flaky/rate-limited member drops
-    out of the result instead of failing the whole ensemble."""
+    # Same LLM-cascade shape as tools/eval-agent's ensemble.py (not imported — services
+    # don't share business logic, only planqa-schemas). One flaky/rate-limited member drops
+    # out of the result instead of failing the whole ensemble.
     if not assembly:
         return []
     with ThreadPoolExecutor(max_workers=len(assembly)) as pool:

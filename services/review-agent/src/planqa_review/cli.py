@@ -60,14 +60,18 @@ def cmd_review(args: argparse.Namespace) -> int:
     # structure obvious at a glance, not just a bare timestamp.
     out_dir = args.out or Path("outputs/review") / args.profile / _timestamp()
     json_path, md_path = write_report(out_dir, result, rulebook, stats)
-    # Fire-and-forget — a real (non-benchmark/experiment) review only, so ablation runs
-    # don't spam eval-service with synthetic traffic. Never blocks/fails this command.
-    notify_eval_service(to_json_dict(result, stats))
+    # Real (non-benchmark/experiment) review only, so ablation runs don't spam eval-service
+    # with synthetic traffic. Print first so the summary shows up immediately, then join —
+    # main() calls sys.exit() right after this returns, and an unjoined daemon thread can be
+    # killed by interpreter shutdown before its POST ever lands.
+    notify_thread = notify_eval_service(to_json_dict(result, stats))
     print(
         f"{doc_id}: {len(result.issues)}건 지적, {stats.total_wall_seconds:.1f}초 — {json_path}, {md_path}"
     )
     for error in result.tier_errors:
         print(f"  ⚠️ {error}", file=sys.stderr)
+    if notify_thread is not None:
+        notify_thread.join(timeout=5.0)
     return 0
 
 
