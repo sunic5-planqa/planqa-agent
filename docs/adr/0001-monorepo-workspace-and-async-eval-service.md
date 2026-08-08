@@ -87,3 +87,29 @@
     would fix whole-workspace collection but breaks that `conftest` import pattern — not
     worth changing established test code for. Root `README.md` documents the per-package
     form.
+
+- Update (2026-08-09): `eval-service/judge.py`'s real logic is implemented (was a stub
+  above) — an LLM cascade, not "re-verify every finding with the full ensemble." Confirmed
+  this pattern against real precedent before building it: [FrugalGPT](https://github.com/stanford-futuredata/FrugalGPT)
+  (Stanford — cascades cheap→expensive models, stops once one response is reliable) and
+  [RouteLLM](https://github.com/lm-sys/RouteLLM) (LMSYS — abstract `Router.calculate_strong_win_rate()`,
+  routes to the strong model only past a calibrated threshold). Our version swaps RouteLLM's
+  *trained* router for a self-reported confidence tag (cheaper — needs no training data):
+  - Tier 1 (every finding, one batched call, cheap model): asks the model to self-report
+    `"confidence": "confident"|"uncertain"` alongside its `valid` verdict. `"confident"`
+    verdicts are final — most findings should land here, at the cost of one batched call
+    total.
+  - Tier 2 (only `"uncertain"` findings, only if `EVAL_SERVICE_ENSEMBLE` is configured): each
+    ensemble member independently re-checks that one finding (`run_ensemble`, ported fresh
+    into `eval-service/ensemble.py` — not imported from `tools/eval-agent`, per this ADR's
+    own no-cross-import rule). Majority vote if they agree past 2/3; otherwise the
+    `EVAL_SERVICE_BACKEND` model acts as arbiter and the entry is flagged `ambiguous=True`.
+  - This deliberately mirrors review-agent's own screen(cheap/wide)→confirm(expensive/narrow)
+    cost structure one layer up, rather than paying full-ensemble cost on every finding.
+  - `eval-service` bundles its own copy of `rulebook_v1.0.md` (`data/`) and depends on
+    `planqa-schemas` for `parse_rulebook`/`RuleBook` — using the shared *schema* package is
+    fine per this ADR's decision above; it does not import `tools/eval-agent` or
+    `services/review-agent` business logic.
+  - `eval-service` also gained its own minimal `llm/` (base/gemini/factory), deliberately
+    cloud-only (no Ollama) — it has to keep up with review-agent's live request rate, unlike
+    `eval-agent`'s offline benchmark runs where a laptop-local model is fine.

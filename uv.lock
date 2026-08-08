@@ -503,6 +503,8 @@ version = "0.1.0"
 source = { editable = "services/eval-service" }
 dependencies = [
     { name = "fastapi" },
+    { name = "google-genai" },
+    { name = "planqa-schemas" },
     { name = "uvicorn" },
 ]
 
@@ -515,6 +517,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "google-genai", specifier = ">=0.3" },
+    { name = "planqa-schemas", editable = "packages/planqa-schemas" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
 
