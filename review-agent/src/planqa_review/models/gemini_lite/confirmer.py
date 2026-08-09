@@ -45,7 +45,7 @@ def _build_prompt(candidates: list[tuple[ScreenCandidate, Chunk, RuleDef]], glob
 
 
 def _is_reference_excused(rule_id: str, rulebook: RuleBook, original_text: str, doc_id: str, level: Level, location: str, source_text: str) -> bool:
-    """§3: reference-citation exception rules (LG-04/TC-02/AE-01/GA-03) are decided by the
+    """§3: reference-citation exception rules (LG-03/TC-02/AE-01/GA-03) are decided by the
     deterministic proxy the eval-agent already validated (verifier.py), not by the LLM's
     own excused claim — see docs/review_agent_architecture.md."""
     if rule_id not in rulebook.reference_exception_rule_ids:

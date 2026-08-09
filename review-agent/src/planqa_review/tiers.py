@@ -26,10 +26,22 @@ TIER_ORDER: tuple[Level, ...] = (
     Level.SENTENCE,
 )
 
+# §1's "위계 판정 원칙" footnote: 부재 확인형(Absence Check) 룰 — rules that ask "does this
+# statement exist ANYWHERE in the document" (e.g. "was this abbreviation ever defined",
+# "was this premise ever stated") can't be answered from a single paragraph/sentence chunk,
+# only from the whole document — so they're always routed to the Document tier regardless of
+# where their category would otherwise place them. The rulebook only names these two
+# examples ("TC-02 등이나 LG-01") — no column marks the full set, so this list is exactly
+# what §1 names, not a guess at a larger category. Keep in sync if §1 names more.
+ABSENCE_CHECK_RULE_IDS: frozenset[str] = frozenset({"LG-01", "TC-02"})
+
 
 def rules_for_tier(rulebook: RuleBook, level: Level) -> list[RuleDef]:
     """Shared across every model profile (not just gemini_lite) and by the pipeline's own
     instrumentation, which needs to know which rules a tier's call covers without importing
     a specific profile's internals."""
     categories = TIER_CATEGORIES.get(level, ())
-    return [rule for rule in rulebook.rules.values() if rule.category in categories]
+    rules = [rule for rule in rulebook.rules.values() if rule.category in categories]
+    if level is not Level.DOCUMENT:
+        rules = [rule for rule in rules if rule.rule_id not in ABSENCE_CHECK_RULE_IDS]
+    return rules
