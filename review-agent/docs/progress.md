@@ -795,3 +795,41 @@ not a duplicate.**
 See `docs/handoff_2026-08-09_model-pilot-and-demo.md`'s "다음 세션이 즉시 해야 할 일" —
 short version: clarify demo scope with the user, don't touch the gateway (credit is at
 zero), set up eval-agent's `.env` before trying to run it.
+
+## 2026-08-10 — Demo v1 shipped: category_screen + Claude confirm, synced to dev
+
+### Done
+
+- Demo config decided with the user, in order: ① 2단계형(기존 baseline과 동일) ② 위계형
+  청킹(기존 유지) ③+④ 새 구조 `structures/category_screen.py` — 스크리닝은 카테고리 라벨만
+  받고(룰 텍스트 없음), 정밀판정이 카테고리 내 룰 전체를 놓고 구체적 rule_id를 직접 고름.
+  퓨샷은 이번엔 안 넣음(후속 작업).
+- `llm/anthropic.py` 신규 — Claude 직접 클라이언트(게이트웨이 아님, 팀 자체 크레딧).
+  실제 문서로 스모크 테스트하다 라이브로 잡은 버그 2개: (1) `claude-sonnet-5`는
+  `temperature` 파라미터 자체를 거부함(400) — 모델별로 온오프하는 `_NO_TEMPERATURE_MODELS`로
+  해결. (2) extended thinking이 기본 켜져 있어 응답이 `ThinkingBlock`만 오고 텍스트가 없는
+  경우 발생 — `thinking: disabled` 명시 + 첫 텍스트 블록을 스캔하도록 수정. 결과: DOC-006
+  기준 213초 → 71초.
+- GitHub issue #4(팀원 요청) 대응: `Issue.related_location` 필드 추가 — LG/LF/GA(관계형 룰)만
+  채워지고 나머지는 항상 None. `diff_report.py`/마크다운 출력에도 반영.
+- CLI에 `--structure`, `--screen-backend`/`--confirm-backend` 추가 — 스크리닝/정밀판정에
+  서로 다른 백엔드(Gemini+Claude)를 쓸 수 있게 됨.
+- `sunic5-planqa/planqa-agent`의 `dev` 브랜치를 조사하다 발견: dev(그리고
+  `sunic5-planqa/planqa` 백엔드에 vendoring된 사본)의 `tiers.py`가 2026-08-05 룰북 개편
+  이전 매핑을 쓰고 있었음(다수 카테고리 룰이 위계에서 누락) — GitHub 이슈 #6/#7로 등록.
+- `dev` 기준으로 서비스에 필요한 부분만 이식해 PR #8 제출 → 팀원 리뷰 후 merge, 그 위에
+  실제 버그 수정도 받음(dedupe가 서로 다른 `related_location`을 가진 관계형 이슈를 잘못
+  합치던 버그, Anthropic `APIConnectionError` 재시도 누락, `category_screen.py`가
+  baseline(`models/gemini_lite/context.py`)을 import해서 additive-only 원칙을 스스로
+  어겼던 것 등) — 이 수정들을 다시 `feature/review-agent`로 역포팅함.
+- **로컬 `feature/review-agent`가 origin보다 10커밋 밀려있었던 것도 이번에 발견해서 push함**
+  — `ABSENCE_CHECK_RULE_IDS` 수정이 그 안에 있었는데 안 올라가 있어서, 이슈 #6에서 팀원이
+  "해당 수정이 없다"고 잘못 판단하게 만들었음(원격만 보고 grep했으니 당연함). push 후
+  이슈에 정정 코멘트 남김.
+
+### Next
+
+- PR #8 merge 확인 완료. 백엔드(`sunic5-planqa/planqa`)의 vendored 사본 재동기화는 아직 안
+  함 — 다음에 논의.
+- 퓨샷 예시(정적 엣지케이스) 추가는 보류 상태, 필요하면 후속 작업으로.
+- 이제 다시 구조/모델 실험 계획으로 복귀 예정(다음 세션에서 이어감).
