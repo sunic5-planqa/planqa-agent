@@ -672,3 +672,87 @@ initial transient DNS failure on the first attempt.
 - Resume the Cell 3 structure work per the checkpoint above: still deciding whether to build
   GeminiClient's tool-calling method now (originally-approved order) or defer it to when Cell 4
   actually needs a concrete tool schema — not yet decided.
+
+## 2026-08-09 — Model pilot infra + 제안0/셀3/셀3R structures
+
+### Done
+
+- **Rulebook audit before touching anything live**: re-read the current 41-rule rulebook
+  end to end and cross-checked every code path against it. `TIER_CATEGORIES`/parsing/§3
+  exception rules all already correct (previous session's fix holds up). Found one real
+  gap: §1's "부재 확인형(Absence Check)" concept (LG-01/TC-02 — rules that ask "does this
+  exist anywhere in the document," unanswerable from a single paragraph/sentence chunk) was
+  never implemented — those two rules were being checked at every tier, not just Document.
+  Fixed in `tiers.py` (`ABSENCE_CHECK_RULE_IDS`, excluded outside Document tier). Fixed a
+  stale comment in `confirmer.py` (said LG-04, current §3 target is LG-03 — logic was
+  already dynamic/correct, only the comment was wrong).
+- **Model pilot infrastructure**: discovered (via the user's own API gateway,
+  `docs.mindlogic.ai/docs/sookmyung/api-gateway`) that Claude/GPT/Gemini/**EXAONE**/Solar
+  Pro3 are all reachable through one OpenAI-compatible endpoint + one key — no separate
+  vendor integrations needed. Built `llm/gateway.py` (`GatewayClient`), registered as
+  backend `"gateway"` in `factory.py`. Real gotcha: Cloudflare fronts the gateway and
+  blocks the default httpx/urllib User-Agent outright (error 1010, a bot-fingerprint rule,
+  not an auth check) — fixed with a browser-shaped UA header. Verified actual routing (not
+  just the model's own unreliable self-report) via the response's top-level `model` field
+  for all 5 candidates. EXAONE (236B) measured 60s+ on a single trivial prompt — bumped
+  `GatewayClient`'s timeout to 240s to give real pipeline-sized prompts headroom.
+- **QA dataset refreshed** to the latest frozen file (user-provided) — golden dataset sheet
+  unchanged, gained a new "예외조건 golden dataset" sheet (995 rows, exception-condition
+  examples) for future few-shot work.
+- **Pilot doc selection**: DOC-006/DOC-003/DOC-012/DOC-001/DOC-008, one per difficulty tier
+  from `[멘토용]_오류_정답지.md`'s recommended test order plus the DOC-008 false-positive
+  check — chosen instead of the full 20-doc benchmark to keep the pilot cheap.
+- **`docs/experiments/results.md`** created — three sections (모델/파이프라인/퓨샷) to hold
+  ablation results as they land, per the user's explicit ask.
+- **`experiment.py` generalized**: `run_experiment()` now takes an optional `review_fn`
+  (defaults to baseline via `models.PROFILES`/`pipeline.review_document` — fully backward
+  compatible, all existing tests unchanged). `cli.py` gained `--structure` on **both**
+  `review` and `experiment` subcommands, looking up `structures.STRUCTURES`.
+- **Three new structures built** (all additive — `pipeline.py`/`models/gemini_lite/*`
+  untouched), each in its own `structures/<name>.py`, tested with `ScriptedLLM`/content-aware
+  fakes (no live API cost):
+  - `proposal0.py` — 제안0: same tier chunking as baseline, but no screen/confirm split —
+    one call per tier goes straight to a final verdict.
+  - `cell3.py` — 셀3: same tier chunking, but each category assigned to a tier gets its own
+    independent screen→confirm pass, dispatched concurrently via a thread pool (no real
+    tool-calling — §2 already fixes category-to-tier assignment deterministically, so
+    nothing needs "deciding").
+  - `cell3r.py` — 셀3R: same as 셀3 but dispatch unit is one individual rule, not a whole
+    category — inserted so "finer granularity" and "real tool-calling" (셀4) can be
+    measured as separate variables instead of changing together.
+  - Real gotcha hit twice building these: a naive `"candidates" in system` check to tell
+    screen/confirm calls apart in test fakes broke because `_CONFIRM_SYSTEM`'s own prose
+    says "most **candidates** should come back violated=false" — fixed by checking for
+    `"verdicts"` (only in the confirm schema) instead.
+  - `docs/review_agent_architecture.md` gained a "구조 레지스트리" section documenting the
+    additive-only rule, the structure contract, and this table.
+- **Model pilot run, live, twice interrupted**:
+  - Gemini candidate completed cleanly: 5 docs, 120.7s wall (~24s/doc) — doesn't touch
+    gateway credit at all (separate `GEMINI_API_KEY`), numbers stand as-is.
+  - First live batch run killed mid-Claude on a false alarm — a single large real-document
+    call to Claude via the gateway actually completes in ~8s, so the batch wasn't hung, just
+    slower than the 1-line smoke test suggested. Rewrote the runner to show real-time
+    per-document timing and auto-exclude any candidate whose *single document* exceeds 60s
+    (user's rule), instead of judging a whole 5-doc batch at once.
+  - **Gateway credit ran to ~50% used** (user-reported) partway through re-running
+    Claude/GPT/Solar (EXAONE pre-emptively excluded from smoke-test evidence alone, never
+    live-tested against the pilot documents) — paused all live calls immediately, confirmed
+    with the user whether to keep going (yes — just stop *wasteful* exploratory calls, not
+    the actual experiment), then resumed the same per-document-capped runner for
+    Claude/GPT/Solar. **Still running as of this entry** — outcome not yet known.
+
+### Next
+
+- Land the Claude/GPT/Solar pilot results (or their exclusions) into
+  `docs/experiments/results.md`'s 모델 section, then run each surviving candidate's
+  `predictions.json` through eval-agent (`planqa-eval evaluate`, read-only worktree at
+  `C:\Users\HYESEO\Desktop\eval-agent-check\eval-agent`, needs its own `.env` with an API
+  key first — not yet set up) for recall/precision, plus a human read of Korean
+  `fix_direction` quality (not an LLM judgment — bias risk).
+- Pick the winning model, then decide 셀4's tool-calling home (gateway's OpenAI-compatible
+  `tools`/`tool_choice` fields vs Gemini's native SDK) based on which backend won.
+- Build 셀4, then decide the paragraph-line (셀1/셀1R/셀2) scope from how 셀3/셀3R/셀4 compare
+  — per the handoff doc, not a fixed count decided in advance.
+- Remaining known gap, unrelated to this session's work: `llm/gemini.py`'s
+  `DEFAULT_MODEL = "gemini-2.5-flash"` is deprecated 2026-10-16 — low priority, may resolve
+  itself if Gemini doesn't win the pilot.

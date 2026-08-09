@@ -283,6 +283,47 @@ uv run planqa-review experiment \
 다양성을 올려볼 수 있다. `--profile`/`--backend`/`--screen-model`/`--verify-model`을 바꿔가며
 같은 벤치마크 세트를 여러 번 돌리고 `summary.json`끼리 비교하는 게 이 인프라의 목적이다.
 
+## 구조 레지스트리 — 파이프라인 구조(제안0~셀2) ablation
+
+"모델 프로필"이 같은 baseline 구조 안에서 프롬프트/모델을 바꾸는 축이라면, **구조 레지스트리**는
+그 baseline 구조 자체를 통째로 다른 오케스트레이션으로 바꿔보는 축이다. 후보 로스터(제안0/제안5
+baseline/셀3/셀3R/셀4/셀1/셀1R/셀2, + 얹는 보강 제안6~9)의 정의와 실험 순서는
+`docs/handoff_2026-08-08_structure_ablation.md`에, 실행 결과는 `docs/experiments/results.md`에
+정리한다 — 여기서는 코드 구조만 설명한다.
+
+**추가 전용 원칙(중요)**: 이미 만든 구조의 코드는 절대 고치지 않는다 — `pipeline.py`(baseline
+로직)와 `models/gemini_lite/*`(baseline 프롬프트)는 손대지 않고, 새 구조는 항상
+`structures/<name>.py`라는 새 파일로 추가한다. 다른 구조를 "참고/복사"하는 건 되지만
+import해서 재사용하지는 않는다 — 셀3R이 셀3과 거의 같은 로직이어도 셀3.py를 import하지 않고
+새로 복제/수정한 게 그 이유. 이미 측정이 끝난 구조의 공용 코드를 나중에 고치면 그 구조의 숫자가
+조용히 무효화되기 때문(이건 "우리 모델이 남 모델보다 낫다"가 아니라 "우리 내부 통제 변수가
+각각 결과에 얼마나 영향을 미치는가"를 보는 ablation 연구라 회귀 방지가 특히 중요).
+
+**공용으로 계속 재사용하는 것**(구조가 뭐든 동일해야 공정한 비교가 됨): `document.py`(청킹),
+`schema.py`, `rulebook.py`, `dedupe.py`, `instrumentation.py`(`record_call`/`CallEvent`),
+`llm/*`(클라이언트+계측), `tiers.py`(§2 위계-카테고리 배정 + Absence Check 제외).
+
+**구조 계약**: `structures/<name>.py`는 `review_document(doc_id, document_text, rulebook,
+screen_llm, confirm_llm) -> ReviewResult`(위치 인자 5개, `pipeline.review_document`에서 `profile`
+인자만 뺀 시그니처) 하나만 노출하면 된다. `structures/__init__.py`의 `STRUCTURES` dict에 한 줄
+등록하면 `planqa-review review --structure <name>` / `planqa-review experiment --structure
+<name>`으로 즉시 실행 가능 — `experiment.py`가 baseline(`--profile`, `models.PROFILES` 조회)
+대신 이 함수를 그대로 꽂아 돌린다(`run_experiment(..., review_fn=STRUCTURES[name])`). 스크리닝
+없이 한 역할만 쓰는 구조(제안0 등)는 `screen_llm` 인자를 그냥 무시하면 된다 — 그래도 시그니처가
+같아야 이 하네스에 꽂힌다.
+
+지금까지 만든 구조(2026-08-09 기준):
+
+| 구조 | 파일 | 요약 |
+|---|---|---|
+| 제안0 | `structures/proposal0.py` | baseline과 같은 tier 청킹, 스크리닝→정밀판정 2단계를 없애고 위계당 1콜로 바로 최종 판정("2단계 구조 자체가 값어치를 하는가"의 바닥값) |
+| 셀3 | `structures/cell3.py` | baseline과 같은 tier 청킹, 위계에 배정된 카테고리마다 독립된 screen→confirm pass를 스레드풀로 병렬 실행(§2 카테고리 배정이 이미 결정론적이라 진짜 tool-calling 불필요) |
+| 셀3R | `structures/cell3r.py` | 셀3과 동일하되 디스패치 단위가 카테고리가 아니라 개별 룰(더 세분화, tool-calling은 여전히 없음 — 셀4에서 "세분도"와 "tool-calling 도입"을 분리해서 보기 위한 중간 지점) |
+
+아직 안 만든 것(셀4/셀1/셀1R/셀2)은 모델 파일럿 결과(어떤 백엔드/모델을 쓸지)가 먼저 정해져야
+한다 — 셀4부터는 진짜 tool-calling이 필요해서, 어느 클라이언트(게이트웨이의 OpenAI 호환
+tool-calling vs Gemini 네이티브 SDK)에 구현할지가 파일럿 결과에 따라 달라진다.
+
 ## eval-agent와의 관계
 
 이 저장소는 검토 에이전트(`review-agent/`)와 평가 에이전트(`eval-agent/`)를 각자 독립된
