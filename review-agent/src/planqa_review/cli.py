@@ -36,7 +36,11 @@ def cmd_review(args: argparse.Namespace) -> int:
     document_text = args.input.read_text(encoding="utf-8")
     doc_id = args.doc_id or _infer_doc_id(args.input)
     rulebook = parse_rulebook(args.rulebook)
-    profile = PROFILES[args.profile]
+
+    # --structure picks a non-baseline review_fn (see structures/), same convention as
+    # `experiment` — useful for a quick single-document smoke test of a new structure
+    # before committing to a full benchmark run.
+    profile_label = args.structure or args.profile
 
     # Two separate clients so the cheap screening pass and the precise confirm pass can run
     # different models (even different backends) — see docs/review_agent_architecture.md.
@@ -45,9 +49,12 @@ def cmd_review(args: argparse.Namespace) -> int:
     backend_name = args.backend or os.environ.get("PLANQA_LLM_BACKEND") or "gemini"
 
     start = time.perf_counter()
-    result = review_document(doc_id, document_text, rulebook, screen_llm, confirm_llm, profile)
+    if args.structure:
+        result = STRUCTURES[args.structure](doc_id, document_text, rulebook, screen_llm, confirm_llm)
+    else:
+        result = review_document(doc_id, document_text, rulebook, screen_llm, confirm_llm, PROFILES[args.profile])
     stats = build_run_stats(
-        profile=args.profile,
+        profile=profile_label,
         backend=backend_name,
         rulebook_path=args.rulebook,
         screen_llm=screen_llm,
@@ -56,9 +63,9 @@ def cmd_review(args: argparse.Namespace) -> int:
         call_events=result.call_events,
     )
 
-    # Profile name in the default path so `outputs/` makes the originating agent
+    # Profile/structure name in the default path so `outputs/` makes the originating
     # structure obvious at a glance, not just a bare timestamp.
-    out_dir = args.out or Path("outputs/review") / args.profile / _timestamp()
+    out_dir = args.out or Path("outputs/review") / profile_label / _timestamp()
     json_path, md_path = write_report(out_dir, result, rulebook, stats)
     print(
         f"{doc_id}: {len(result.issues)}건 지적, {stats.total_wall_seconds:.1f}초 — {json_path}, {md_path}"
@@ -127,7 +134,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile",
         default=DEFAULT_PROFILE,
         choices=sorted(PROFILES),
-        help="프롬프트/로직 전략 (src/planqa_review/models/) — 모델 실험용",
+        help="프롬프트/로직 전략 (src/planqa_review/models/) — --structure 미지정 시(제안5 baseline) 적용",
+    )
+    review_parser.add_argument(
+        "--structure",
+        default=None,
+        choices=sorted(STRUCTURES),
+        help="구조 ablation용 — 지정 시 baseline(제안5) 대신 이 구조(src/planqa_review/structures/)로 실행, --profile은 무시됨",
     )
     review_parser.set_defaults(func=cmd_review)
 
