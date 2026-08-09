@@ -1,5 +1,10 @@
 # 실험 결과 종합
 
+> **이 문서의 "2. 파이프라인" 로스터(제안0/제안5/셀3/셀3R/셀4/셀1/셀1R/셀2)는 구버전이다.**
+> 현재 유효한 매트릭스와 실행 결과는 `docs/experiments/structure_plan_2026-08-10.md`
+> ("① 판정 단계 수" → "① 실험 결과" 절부터) 참고. 이 문서는 나중에 최종 조합이 다 정해지면
+> 발표용으로 다시 정리할 예정.
+
 > 모델/파이프라인 구조/퓨샷 ablation 실험 결과를 여기에 정리한다. 설계 배경·실행 방법은
 > `docs/review_agent_architecture.md`, 회차별 작업 로그는 `docs/progress.md`,
 > 구조 로스터 정의는 `docs/handoff_2026-08-08_structure_ablation.md` 참고.

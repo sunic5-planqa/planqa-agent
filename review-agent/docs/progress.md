@@ -833,3 +833,178 @@ zero), set up eval-agent's `.env` before trying to run it.
   함 — 다음에 논의.
 - 퓨샷 예시(정적 엣지케이스) 추가는 보류 상태, 필요하면 후속 작업으로.
 - 이제 다시 구조/모델 실험 계획으로 복귀 예정(다음 세션에서 이어감).
+
+## 2026-08-10 (계속) — 구조 실험 재개: ① 판정 단계 수 파일럿 + 계측 버그 수정
+
+### Done
+
+- **Phase 0**: `cell3.py`를 `direct_verdict.py`의 뼈대로 쓰기 전에 먼저 최신화 —
+  additive-only 위반(baseline `extract_global_context` 직접 import) 제거, 중복
+  `_is_reference_excused`를 `verifier.is_reference_excused_by_rule` 공유 함수로 교체,
+  `related_location`(LG/LF/GA) 지원 추가. 이 과정에서 `rule` 변수가 스코프 밖이라
+  `NameError`가 날 뻔한 버그도 잡음. 테스트 1개 추가, 전체 통과.
+- **신규 구조 `structures/direct_verdict.py`**: cell3와 세분화(콜분리×룰전부)·청킹(위계형)을
+  동일하게 유지한 채 판정 단계 수만 1단계로 줄인 통제 변형 — ① 비교를 순수하게 만들기 위해
+  제작(기존 proposal0/cell3는 단계 수와 세분화 방식이 동시에 달라서 confound였음).
+  `STRUCTURES` 레지스트리에 등록, 테스트 4개 추가.
+- **인프라 버그 2개 발견/수정** (review-agent·eval-agent 양쪽에 영향):
+  1. `llm/gemini.py`의 `DEFAULT_MODEL = "gemini-2.5-flash"`가 "신규 사용자에게 더 이상 제공
+     안 됨"(404)으로 완전히 막혀 있었음 → `gemini-flash-lite-latest`로 교체(review-agent,
+     eval-agent 둘 다). 같은 날 팀원이 `eval-service`에서 독립적으로 같은 값으로 고친 것과
+     교차 검증됨(PR #13, `sunic5-planqa/planqa-agent` dev).
+  2. **계측 버그**: `cell3`/`direct_verdict`/`cell3r`처럼 `ThreadPoolExecutor`로 카테고리별
+     screen/confirm을 병렬 디스패치하면서 `screen_llm`/`confirm_llm`을 공유하는 구조 전부가,
+     `record_call()`의 "호출 전후 `llm.usage` 길이 차이" 계측 방식에서 스레드 레이스로 콜
+     수가 최대 3배까지 부풀려지는 버그가 있었음(DOC-001 단독 검증: 실제 API 호출
+     27+17=44회인데 계측은 111회). `instrumentation.py`에 `isolate_client`/`merge_usage`
+     헬퍼를 추가해 카테고리마다 격리된 클라이언트 사본을 쓰도록 고침(`total_wall_seconds`는
+     원래 별도 계측이라 이 버그의 영향 없음). 레이스 재현+수정 검증 테스트도 추가.
+     `cell3r.py`(셸빙됨)도 같은 패턴이라 같이 고침.
+- **① 파일럿 실행**: DOC-001/003/006/008/012, Gemini `gemini-flash-lite-latest` 고정,
+  cell3 vs direct_verdict 비교. 상세 데이터/표는 `docs/experiments/structure_plan_2026-08-10.md`
+  "① 실험 결과" 절 참고. 요약: direct_verdict가 비용(호출 수 -43%, 토큰 -44%, wall time
+  -22%) 그리고 eval-agent 엄격 채점(rule_id+level 정확히 일치)에서도 더 안정적 — cell3는
+  rule_id는 맞히는데 level(Sentence/Paragraph/Logical Unit)을 자주 잘못 귀속시켜 recall이
+  0까지 떨어지는 경우가 있었음(같은 패턴이 direct_verdict에도 있지만 정도가 약함). eval-agent
+  채점 시 predictions.json이 5문서분인데 golden은 40문서 전체라 recall이 왜곡되는 문제도
+  발견 — report.json의 문서별 raw 데이터를 5문서로 rescope해서 재계산(스크래치 스크립트,
+  eval-agent 코드는 안 건드림).
+- **① 잠정 결론**: direct_verdict(1단계) 채택, 나중에 표본 늘려 재검증 예정(사용자 결정).
+- eval-agent(`C:\Users\HYESEO\Desktop\eval-agent-check\eval-agent`) `.env` 처음 설정함(기존
+  미설정 상태였음) — review-agent와 같은 `GEMINI_API_KEYS` 재사용(사용자에게 사전 고지 못한
+  점 지적받음, 이후 유사 작업은 실행 전에 먼저 알리기로).
+- `sunic5-planqa/planqa-agent` dev/eval-agent 브랜치 fetch — 팀원이 `category_screen.py`
+  4개 위계 병렬화(PR #12), eval-service 기본 모델 수정(PR #13) 반영함. 둘 다 데모/신규
+  서비스 쪽이라 `feature/review-agent`로 역포팅 안 함(사용자 확인).
+
+### Next
+
+- ② 청킹 방식(위계형 vs 문단형) 실험 — direct_verdict 기준으로 문단형 변형 구현.
+- ①의 표본이 작아(문서 5개) 확정적이지 않음 — ②③④ 진행하면서 여유 생기면 재검증.
+- `tools/eval-agent`의 동일한 Gemini 기본 모델 버그를 PR로 올릴지는 사용자 승인 대기 중
+  (아직 PR 생성 안 함).
+
+## 2026-08-10 (계속 2) — ② 청킹 방식 파일럿: 문단형 채택
+
+### Done
+
+- **신규 구조 `structures/paragraph_verdict.py`**: direct_verdict(①의 잠정 승자)와 판정
+  방식·세분화는 동일하게 유지하고 청킹만 문단형으로 바꾼 구조. 대부분의 카테고리는
+  `tree.chunks_for(Level.PARAGRAPH)`로 문단 단위 검토하고, GA(상위 목표 정합성)와 §1의
+  부재 확인형 룰(`tiers.ABSENCE_CHECK_RULE_IDS` = LG-01, TC-02)만 문서 전체 1회로 확인 —
+  같은 카테고리(LG/TC)라도 룰에 따라 문단 패스와 문서 패스로 갈라짐. `STRUCTURES`에 등록,
+  테스트 6개 추가(GA/부재확인형 룰이 정확히 Document 위계로만 가는지, 같은 카테고리가 두
+  패스로 쪼개지는지 등).
+- **① 파일럿 재검토 시 재현성 확인**: cell3 재실행에서 recall이 33.3%→0%로 크게 흔들려
+  사용자가 "버그 아니냐"고 의심 → 실제로는 버그가 아니라 eval-agent의 엄격한 위계(Level)
+  일치 요구 때문이었음을 확인. cell3/direct_verdict 둘 다 "rule_id는 맞지만 위계가 다름"
+  매치가 있었고(예: golden Sentence인데 예측 Paragraph), cell3가 이 폭이 더 커서 정식
+  채점에서 recall이 0까지 떨어짐. eval-agent 채점 시 predictions.json이 5문서분인데 golden
+  전체(40문서)로 스코어링되어 recall이 왜곡되는 것도 발견 — report.json을 5문서로 rescope
+  하는 스크래치 스크립트로 대응(eval-agent 코드는 안 건드림).
+- **② 파일럿 실행**: 같은 5문서로 direct_verdict(위계형) vs paragraph_verdict(문단형)
+  비교. paragraph_verdict가 호출 61%, 토큰 64%, 시간 54% 적게 들면서 precision은 2배 이상
+  높았음(위계형이 같은 위반을 여러 위계에서 중복 재확인하느라 비용도 더 들고 FP도 더
+  생기는 것으로 추정). eval-agent 정식 채점(위계 일치 요구)은 이번 비교엔 원천적으로
+  부적합함을 확인 — paragraph_verdict는 애초에 "문단"/"문서" 두 위계만 예측 가능해서, golden
+  이 "문장"/"논리단위"로 라벨한 이슈는 rule_id를 맞혀도 위계가 절대 일치할 수 없음. 상세
+  데이터/결론은 `docs/experiments/results_2026-08-10_phase2_chunking.md` 참고.
+- **② 잠정 결론**: paragraph_verdict(문단형) 채택.
+- **문서 정리 방식 변경(사용자 피드백)**: 버그/구현 세부사항(이 파일)과 실험 결과·분석·
+  결론(Notion 붙여넣기용)을 분리하기로 함. 또한 Notion에 마크다운 표를 붙여넣으면 깨진다는
+  피드백을 받아, 결과 문서의 표를 전부 불릿 목록 형식으로 바꿈 — `results_2026-08-10_*.md`
+  두 파일 모두 이 형식 적용.
+
+### Next
+
+- ③+④ 세분화×퓨샷 6콤보 실험 — paragraph_verdict 기준으로 나머지 5콤보 구현.
+- ①②의 표본이 작아(문서 5개) 확정적이지 않음 — 여유 생기면 DOC-001..020 확대 재검증.
+- `tools/eval-agent` PR 승인 대기 계속.
+
+## 2026-08-10 (계속 3) — JSON 파싱 방어 로직 추가
+
+### Done
+
+- 사용자 요청으로 Phase 1/2 파일럿 산출물(`outputs/experiments/phase{1,2}_*/**/review.json`)
+  15개를 전수 점검 — 문서 구조 자체를 못 잡은 경우는 없었지만, `tier_errors`에 JSON 파싱
+  실패가 9건 있었음(cell3 3, direct_verdict 5, paragraph_verdict 2). 전부 모델이 JSON
+  응답 안에 이스케이프 안 된 백슬래시(윈도우 경로/정규식 조각 등)를 넣거나 트레일링 콤마를
+  남겨서 `json.loads`가 실패한 것 — 실제 API 호출은 성공했는데 그 카테고리의 판정 결과가
+  통째로 유실됨(recall에 부정적 영향 가능).
+- `llm/base.py`의 `parse_json_response`에 복구 폴백 추가: 1차 strict parse 실패 시
+  (1) 잘못된 `\uXXXX` 이스케이프, (2) 그 외 유효하지 않은 백슬래시 이스케이프, (3) 트레일링
+  콤마를 정규식으로 복구한 뒤 재시도. 복구도 실패하면 원래 예외를 그대로 냄(진짜 깨진
+  응답을 조용히 삼키지 않음). 모든 LLM 백엔드가 공통으로 쓰는 진입점이라 한 곳만 고치면
+  Gemini/Anthropic/Ollama/Gateway 전부에 적용됨. 테스트 6개 추가(정상 케이스, 마크다운
+  펜스, 세 가지 복구 케이스, 복구 불가능한 경우 여전히 예외).
+- 기존 Phase 1/2 파일럿 결과는 재실행하지 않음(표본이 작아 이미 재논의 여지를 남겨둔
+  상태) — 이 수정은 앞으로의 실행(Phase 3부터)에 적용됨.
+
+### Next
+
+- ③+④ 세분화×퓨샷 6콤보 실험 계속 진행.
+
+## 2026-08-10 (계속 4) — 모델 정책 정정 + Phase 3 코드 준비(자율 실행)
+
+### Done
+
+- **모델 정책 재확정**: Phase 0/1/2가 전부 Gemini+Gemini로 실행된 게 원래 의도와 다름을
+  사용자가 재차 정정 — 진짜 스크리닝 단계가 있는 구조(cell3)만 screen=Gemini, 나머지는
+  전부(confirm/single_pass 역할) Sonnet이어야 함. ①의 결론(1단계)상 Phase 3 이후 모든
+  구조는 스크리닝 콜이 없으므로 전체가 Sonnet으로 도는 게 맞음. **Phase 3부터는 Sonnet
+  정책으로 진행, Phase 1&2(Gemini+Gemini로 실행된 기존 결과)는 나중에 재실행 예정** —
+  Phase 3의 "콜분리×룰전부" 셀도 기존 paragraph_verdict(Gemini) 결과를 재사용하지 않고
+  Sonnet으로 새로 돌려야 함. `project_phase12_model_policy_redo` 메모리 갱신함.
+- **Phase 1&2 오류 패턴 분석**(Opus 서브에이전트, report.json+golden dataset 대조):
+  AE-03이 "애매하면 다 AE-03"으로 오용되는 게 FP 최다 원인, 하나의 근원 문제가 여러
+  룰/청크로 폭발하는 게 FP의 절반 가까이 차지, 위계(level) 오류는 전부 "실제 범위"가
+  아니라 "본 청크 크기" 기준으로 정해서 생김, 크로스섹션 정합성 추론은 6/6 실패.
+  사용자 확인 후 프롬프트 지시문 2개(증합·허위대립 방지)를 `direct_verdict.py`/
+  `paragraph_verdict.py`의 공유 시스템 프롬프트에 바로 반영함. 세 번째(레벨을 실제
+  범위로 승격)는 출력 스키마에 level 필드 추가가 필요해서 사용자 확인 대기 중.
+- **`fewshot_bank.py` 작성**: 리키지 세이프 풀(DOC-000/021~040 + 예외조건 시트의 합성
+  스니펫)에서 룰마다 위반 최대 2개 + 예외조건 최대 1개를 골라 코드화. 합성 예시는
+  전혀 안 씀 — AE-03/MI-05는 안전한 위반 예시가 없어서 그냥 비워둠(41개 룰 전부 커버
+  요건도 없음). 리키지 검증 테스트 추가.
+- **콤보 4개 코드 완성**(사용자가 요청한 순서: 콜통합×동적/콜분리×동적 이전에 정적
+  4콤보부터): `category_fewshot.py`(콜분리×퓨샷만), `bundled_verdict.py`(콜통합×
+  룰전부), `bundled_fewshot.py`(콜통합×퓨샷만) 신규 작성 + `STRUCTURES` 등록 +
+  각각 테스트. `paragraph_verdict.py`가 이미 콜분리×룰전부 셀. 전체 테스트 163개 통과.
+
+- **level 필드 스키마 변경도 완료**(사용자 승인 후): `document.py`에 `resolve_reported_level()`
+  헬퍼 추가 — 모델이 출력에 `"level"`을 명시하면, 지금 본 청크보다 더 넓은 위계일 때만
+  승격을 인정(좁히는 건 항상 무시)하고, 문단 위치 문자열의 " > " 앞부분을 잘라 상위
+  위계 라벨을 근사함. 5개 구조(`direct_verdict`/`paragraph_verdict`/`category_fewshot`/
+  `bundled_verdict`/`bundled_fewshot`) 전부에 프롬프트 지시문 + 파싱 로직 반영. 유닛
+  테스트(`test_document.py`) + 엔드투엔드 테스트(`test_direct_verdict.py`) 추가. 전체
+  169개 테스트 통과.
+
+### Next
+
+- **실제 파일럿 실행은 아직 보류함** — Sonnet은 실제 과금되는 API라, 사용자 확인 후
+  진행하기로 함. 4콤보(콜통합×룰전부, 콜통합×퓨샷만, 콜분리×퓨샷만, 콜분리×룰전부=
+  paragraph_verdict를 Sonnet으로 재실행)를 5문서 파일럿으로 실행하고 비교표부터 봐야 함.
+- 그 다음 동적퓨샷 2콤보, Phase 3 결과 문서화, 최종적으로 Phase 1&2 Sonnet 재실행.
+
+### 2026-08-10 (계속 5) — 콜분리 구조 비용/시간 최적화
+
+Sonnet으로 돌리기 전에, 콜분리 계열(`paragraph_verdict`/`category_fewshot`)의 비용·시간을
+줄일 수 있는지 사용자가 물어봄. 확인 결과 **함수 호출(tool-calling)/멀티에이전트를 전혀
+안 쓰고 있음** — 어떤 카테고리를 부를지는 파이썬 코드가 룰북 기준으로 이미 결정해두고,
+`ThreadPoolExecutor`로 그냥 여러 API 콜을 병렬로 보내는 구조. 두 가지 최적화 적용:
+
+1. **`max_workers` 동적화**: 기존엔 고정 4라서 카테고리 7~8개면 배치 2번으로 나눠 돌았음.
+   이제 `max_workers=None`(기본값)이면 그 패스의 카테고리 수만큼 전부 한 번에 병렬 실행
+   (문단 패스 최대 7, 문서 패스 최대 3이라 배치가 필요 없어짐) — 비용은 그대로, wall
+   time만 줄어듦.
+2. **Anthropic 프롬프트 캐싱**: 콜분리는 카테고리 콜마다 같은 문서 본문(청크)을 매번 새로
+   전송하는 게 콜통합보다 비용이 더 드는 원인 중 하나였음. `llm/base.py`의
+   `LLMClient.complete_json`에 `cache_prefix` 파라미터 추가(하위호환, 다른 백엔드는
+   그냥 이어붙임) — `llm/anthropic.py`가 실제로 `cache_control: ephemeral` 블록을
+   씀(system 프롬프트는 항상 캐시, `cache_prefix`로 넘어온 공유 문서 본문도 캐시).
+   `paragraph_verdict.py`/`category_fewshot.py`의 프롬프트를 "공유되는 문서 본문
+   (cache_prefix) + 카테고리별로 다른 룰/퓨샷 블록(prompt)"으로 재구성. 카테고리 콜마다
+   cache_prefix가 바이트 단위로 동일한지 검증하는 테스트 추가.
+   `direct_verdict.py`/`bundled_*`는 이번엔 안 건드림(Phase 1&2 재실행 때 필요하면 같이
+   적용 예정).
+   테스트 173개 통과.
