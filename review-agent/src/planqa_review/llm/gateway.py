@@ -53,7 +53,10 @@ class GatewayClient(LLMClient):
             timeout=240.0,
         )
 
-    def complete_json(self, *, system: str, prompt: str) -> Any:
+    def complete_json(self, *, system: str, prompt: str, cache_prefix: str | None = None) -> Any:
+        # No prompt-caching support here — just concatenate, same as passing the combined
+        # text as `prompt` alone.
+        full_prompt = f"{cache_prefix}\n\n{prompt}" if cache_prefix else prompt
         start = time.perf_counter()
         last_error: httpx.HTTPStatusError | None = None
         for attempt in range(_MAX_ATTEMPTS):
@@ -63,7 +66,7 @@ class GatewayClient(LLMClient):
                     "model": self.model,
                     "messages": [
                         {"role": "system", "content": system},
-                        {"role": "user", "content": prompt},
+                        {"role": "user", "content": full_prompt},
                     ],
                     "temperature": self._temperature,
                 },

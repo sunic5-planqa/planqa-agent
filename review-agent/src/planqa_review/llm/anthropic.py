@@ -47,7 +47,23 @@ class AnthropicClient(LLMClient):
         self.usage: list[CallStats] = []
         self._client = client or anthropic.Anthropic(api_key=_load_api_key(api_key))
 
-    def complete_json(self, *, system: str, prompt: str) -> Any:
+    def complete_json(self, *, system: str, prompt: str, cache_prefix: str | None = None) -> Any:
+        # `system` is always static per-caller text in this codebase (a module-level
+        # constant, never built per-call) — marking it as an ephemeral cache breakpoint is
+        # free/safe and pays off across every call this process makes, not just within one
+        # document. `cache_prefix`, when given, is the large text several concurrent
+        # per-category calls share within one document (e.g. the tier's full chunk text) —
+        # a second breakpoint so the *category-specific* suffix in `prompt` is all that's
+        # billed at full price on the 2nd+ call. Both are no-ops (silently ignored, not an
+        # error) if the combined prefix is under Anthropic's minimum cacheable length.
+        system_blocks = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        if cache_prefix:
+            content: Any = [
+                {"type": "text", "text": cache_prefix, "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": prompt},
+            ]
+        else:
+            content = prompt
         start = time.perf_counter()
         last_error: anthropic.APIError | None = None
         for attempt in range(_MAX_ATTEMPTS):
@@ -59,8 +75,8 @@ class AnthropicClient(LLMClient):
                 # to burn the entire max_tokens budget on thinking with zero text left over
                 # (a response containing only a ThinkingBlock). Disable it explicitly.
                 thinking={"type": "disabled"},
-                system=system,
-                messages=[{"role": "user", "content": prompt}],
+                system=system_blocks,
+                messages=[{"role": "user", "content": content}],
             )
             if self.model not in _NO_TEMPERATURE_MODELS:
                 kwargs["temperature"] = self._temperature

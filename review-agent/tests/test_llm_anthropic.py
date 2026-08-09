@@ -62,8 +62,34 @@ def test_complete_json_posts_expected_request_shape():
     assert call["model"] == "claude-sonnet-5"
     assert "temperature" not in call  # rejected outright by claude-sonnet-5 — see anthropic.py
     assert call["thinking"] == {"type": "disabled"}
-    assert call["system"] == "시스템 지시"
+    # system is always sent as a cache-breakpoint block — it's static per-caller text in
+    # this codebase, so caching it is free and pays off across every call, not just one.
+    assert call["system"] == [{"type": "text", "text": "시스템 지시", "cache_control": {"type": "ephemeral"}}]
     assert call["messages"] == [{"role": "user", "content": "사용자 프롬프트"}]
+
+
+def test_complete_json_splits_cache_prefix_into_its_own_cached_block():
+    llm, fake = _client_with_handler(lambda kwargs: _message('{"summary": "요약"}'))
+    llm.complete_json(system="s", prompt="카테고리별 룰", cache_prefix="공유되는 문서 청크 본문")
+
+    call = fake.messages.calls[0]
+    assert call["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "공유되는 문서 청크 본문", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "카테고리별 룰"},
+            ],
+        }
+    ]
+
+
+def test_complete_json_without_cache_prefix_sends_plain_string_content():
+    llm, fake = _client_with_handler(lambda kwargs: _message('{"summary": "요약"}'))
+    llm.complete_json(system="s", prompt="프롬프트만")
+
+    call = fake.messages.calls[0]
+    assert call["messages"] == [{"role": "user", "content": "프롬프트만"}]
 
 
 def test_complete_json_parses_content_and_records_usage():

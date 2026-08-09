@@ -10,7 +10,9 @@ from google.genai import types
 
 from planqa_review.llm.base import CallStats, LLMClient, parse_json_response
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+# "gemini-2.5-flash" 404s as "no longer available to new users" as of this session — see
+# docs/progress.md and docs/review_agent_architecture.md for the probe that found this.
+DEFAULT_MODEL = "gemini-flash-lite-latest"
 
 # The free tier caps out fast (as low as 5 RPM, or 20 requests/day on some models), and a
 # batch run naturally fires many calls back to back. GEMINI_API_KEYS lets several free-tier
@@ -76,7 +78,11 @@ class GeminiClient(LLMClient):
         self._temperature = temperature
         self.usage: list[CallStats] = []
 
-    def complete_json(self, *, system: str, prompt: str) -> Any:
+    def complete_json(self, *, system: str, prompt: str, cache_prefix: str | None = None) -> Any:
+        # No prompt-caching support here (Gemini has its own, separate caching API this
+        # client doesn't implement) — just concatenate, same as passing the combined text
+        # as `prompt` alone.
+        full_prompt = f"{cache_prefix}\n\n{prompt}" if cache_prefix else prompt
         start = time.perf_counter()
         last_error: genai_errors.APIError | None = None
         for _cycle in range(_MAX_CYCLES):
@@ -85,7 +91,7 @@ class GeminiClient(LLMClient):
                 try:
                     response = client.models.generate_content(
                         model=self.model,
-                        contents=prompt,
+                        contents=full_prompt,
                         config=types.GenerateContentConfig(
                             system_instruction=system,
                             response_mime_type="application/json",
