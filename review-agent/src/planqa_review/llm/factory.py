@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 
 from planqa_review.llm.base import LLMClient
+from planqa_review.llm.gateway import DEFAULT_MODEL as GATEWAY_DEFAULT_MODEL
+from planqa_review.llm.gateway import GatewayClient
 from planqa_review.llm.gemini import DEFAULT_MODEL as GEMINI_DEFAULT_MODEL
 from planqa_review.llm.gemini import GeminiClient
 from planqa_review.llm.ollama import DEFAULT_MODEL as OLLAMA_DEFAULT_MODEL
@@ -11,6 +13,7 @@ from planqa_review.llm.ollama import OllamaClient
 _BUILDERS = {
     "gemini": (GeminiClient, GEMINI_DEFAULT_MODEL),
     "ollama": (OllamaClient, OLLAMA_DEFAULT_MODEL),
+    "gateway": (GatewayClient, GATEWAY_DEFAULT_MODEL),
 }
 
 
