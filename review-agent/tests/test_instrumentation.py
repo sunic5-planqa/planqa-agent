@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any
 
-from planqa_review.instrumentation import CallEvent, record_call
+from planqa_review.instrumentation import CallEvent, isolate_client, merge_usage, record_call
 from planqa_review.llm.base import CallStats, LLMClient
 from planqa_review.schema import Level
 
@@ -63,3 +65,63 @@ def test_record_call_tags_multiple_stats_if_a_call_appends_more_than_one():
 
     assert len(events) == 2
     assert {e.stats.total_tokens for e in events} == {2, 4}
+
+
+class _SlowSharedLLM(LLMClient):
+    """Appends to `usage` only after a barrier-synchronized delay, so concurrent callers'
+    append windows deliberately overlap — reproduces the real GeminiClient/AnthropicClient
+    situation (network latency between call-start and the eventual `usage.append`)."""
+
+    def __init__(self, worker_count: int) -> None:
+        self.model = "fake"
+        self.usage: list[CallStats] = []
+        self._barrier = threading.Barrier(worker_count)
+
+    def complete_json(self, *, system: str, prompt: str) -> Any:
+        self._barrier.wait()  # every worker reaches record_call's `before` snapshot together
+        time.sleep(0.05)  # then all append at roughly the same moment
+        self.usage.append(CallStats(1.0, 1, 1, 2))
+        return {"ok": True}
+
+
+def test_record_call_double_counts_under_real_concurrency_without_isolation():
+    """Documents the bug isolate_client/merge_usage fix: several threads sharing one LLM
+    instance and calling record_call directly on it race on the before/after `usage` diff,
+    so the total events recorded balloons past the true number of calls made."""
+    worker_count = 5
+    llm = _SlowSharedLLM(worker_count)
+    events: list[CallEvent] = []
+
+    def worker():
+        record_call(llm, stage="screen", tier=None, rule_ids=(), events=events, call=lambda: llm.complete_json(system="", prompt=""))
+
+    threads = [threading.Thread(target=worker) for _ in range(worker_count)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(llm.usage) == worker_count  # the real number of calls made
+    assert len(events) > worker_count  # but bookkeeping over-attributed them
+
+
+def test_isolate_client_and_merge_usage_prevent_double_counting_under_concurrency():
+    worker_count = 5
+    llm = _SlowSharedLLM(worker_count)
+    events: list[CallEvent] = []
+
+    def worker():
+        isolated = isolate_client(llm)
+        try:
+            record_call(isolated, stage="screen", tier=None, rule_ids=(), events=events, call=lambda: isolated.complete_json(system="", prompt=""))
+        finally:
+            merge_usage(llm, isolated)
+
+    threads = [threading.Thread(target=worker) for _ in range(worker_count)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(llm.usage) == worker_count
+    assert len(events) == worker_count

@@ -7,6 +7,40 @@ from planqa_review.structures.cell3 import review_document
 _DOC = "# 샘플 PRD\n\n## 1. 목적\n\n간단한 목적 설명입니다.\n"
 
 
+class _RelationalLLM:
+    """Scripts an LG-02 (relational category) violation with a related_location, and an
+    MI-01 (non-relational) violation that supplies related_location anyway — the latter
+    must be dropped since only LG/LF/GA categories carry a second location."""
+
+    def __init__(self) -> None:
+        self.model = "fake"
+        self.usage: list[CallStats] = []
+        self.calls: list[dict[str, str]] = []
+
+    def complete_json(self, *, system: str, prompt: str):
+        self.calls.append({"system": system, "prompt": prompt})
+        self.usage.append(CallStats(elapsed_seconds=0.0, prompt_tokens=None, completion_tokens=None, total_tokens=None))
+        if "verdicts" not in system:
+            if "LG-02" in prompt:
+                return {"candidates": [{"chunk_index": 0, "rule_id": "LG-02", "quoted_text": "간단한 목적 설명입니다.", "reason": "상충"}]}
+            if "MI-01" in prompt:
+                return {"candidates": [{"chunk_index": 0, "rule_id": "MI-01", "quoted_text": "간단한 목적 설명입니다.", "reason": "불명확"}]}
+            return {"candidates": []}
+        return {
+            "verdicts": [
+                {
+                    "index": 0,
+                    "violated": True,
+                    "original_text": "간단한 목적 설명입니다.",
+                    "description": "상충 발생",
+                    "fix_direction": "내용을 일치시킬 것",
+                    "excused": False,
+                    "related_location": "2. 배경",
+                }
+            ]
+        }
+
+
 class _ContentAwareLLM:
     """Unlike `ScriptedLLM`, this responds based on prompt *content* rather than strict
     call order — cell3 dispatches many more (and, under real concurrency, unordered)
@@ -91,3 +125,15 @@ def test_review_document_runs_with_real_concurrency(rulebook_path):
 
     assert any(issue.rule_id == "MI-01" for issue in result.issues)
     assert result.tier_errors == ()
+
+
+def test_review_document_populates_related_location_only_for_relational_categories(rulebook_path):
+    rulebook = parse_rulebook(rulebook_path)
+    screen_llm = _RelationalLLM()
+    confirm_llm = _RelationalLLM()
+
+    result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm, max_workers=1)
+
+    by_rule = {issue.rule_id: issue for issue in result.issues}
+    assert by_rule["LG-02"].related_location == "2. 배경"
+    assert by_rule["MI-01"].related_location is None

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from planqa_review.dedupe import dedupe_issues
 from planqa_review.document import Chunk, parse_document
-from planqa_review.instrumentation import CallEvent, record_call
+from planqa_review.instrumentation import CallEvent, isolate_client, merge_usage, record_call
 from planqa_review.llm.base import LLMClient
 from planqa_review.models.gemini_lite.context import extract_global_context
 from planqa_review.pipeline import ReviewResult
@@ -133,17 +133,28 @@ def _review_rule(
     screen_llm: LLMClient, confirm_llm: LLMClient, events: list[CallEvent],
 ) -> list[Issue]:
     """One rule's full screen→confirm pass — the unit of work dispatched in parallel
-    across every rule assigned to a tier (finer than cell3's per-category dispatch)."""
-    candidates = record_call(
-        screen_llm, stage="screen", tier=level, rule_ids=(rule.rule_id,), events=events,
-        call=lambda: _screen_rule(chunks, rule, global_context, screen_llm),
-    )
-    if not candidates:
-        return []
-    return record_call(
-        confirm_llm, stage="confirm", tier=level, rule_ids=(rule.rule_id,), events=events,
-        call=lambda: _confirm_rule(candidates, chunks, rule, doc_id, level, global_context, source_text, rulebook, confirm_llm),
-    )
+    across every rule assigned to a tier (finer than cell3's per-category dispatch).
+
+    `screen_llm`/`confirm_llm` are shared across every concurrently-dispatched rule, so each
+    call here goes through a private `isolate_client` copy — see instrumentation.py's
+    `record_call` docstring for why the shared instance can't be used directly under
+    concurrency."""
+    screen_copy = isolate_client(screen_llm)
+    confirm_copy = isolate_client(confirm_llm)
+    try:
+        candidates = record_call(
+            screen_copy, stage="screen", tier=level, rule_ids=(rule.rule_id,), events=events,
+            call=lambda: _screen_rule(chunks, rule, global_context, screen_copy),
+        )
+        if not candidates:
+            return []
+        return record_call(
+            confirm_copy, stage="confirm", tier=level, rule_ids=(rule.rule_id,), events=events,
+            call=lambda: _confirm_rule(candidates, chunks, rule, doc_id, level, global_context, source_text, rulebook, confirm_copy),
+        )
+    finally:
+        merge_usage(screen_llm, screen_copy)
+        merge_usage(confirm_llm, confirm_copy)
 
 
 def review_document(
