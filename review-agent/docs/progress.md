@@ -756,3 +756,42 @@ initial transient DNS failure on the first attempt.
 - Remaining known gap, unrelated to this session's work: `llm/gemini.py`'s
   `DEFAULT_MODEL = "gemini-2.5-flash"` is deprecated 2026-10-16 — low priority, may resolve
   itself if Gemini doesn't win the pilot.
+
+## 2026-08-09 (continued) — Pilot blocked on credit, structure/few-shot plan rewritten, demo now priority #1
+
+**Full detail in `docs/handoff_2026-08-09_model-pilot-and-demo.md` — this entry is a pointer,
+not a duplicate.**
+
+- Gateway credit ran out completely (402 Payment Required) mid-way through re-running
+  Claude — only Gemini's pilot data is valid (5 docs, 120.7s). GPT-5.4/Solar Pro3 never
+  ran; EXAONE pre-emptively excluded from smoke-test evidence alone.
+- Switched to literature research in place of the blocked live pilot: KMMLU rankings,
+  function-calling accuracy, pricing, TTFT/throughput, and — the most decision-relevant
+  finding — three independent studies showing Gemini is inherently recall-oriented and GPT
+  inherently precision-oriented on classification tasks, which maps directly onto the
+  screen (wants recall) vs confirm (wants precision) role split. Leaning
+  screen=Gemini Flash-Lite, confirm=Claude Sonnet 5, but the Sonnet lean was flagged to the
+  user repeatedly as carrying self-bias risk (this assistant is Claude) — not user-confirmed.
+- **Structure/few-shot plan rewritten**, replacing the previous handoff's 8-structure+4-addon
+  roster: new sequential order (①단계수 → ②청킹 → ③+④세분화×퓨샷 묶어서) plus a clean 2×3
+  matrix (콜통합/콜분리 × 룰전부명시/퓨샷만/동적퓨샷) replacing the old rule-level/tool-calling
+  granularity line (셀3R/셀4 dropped — folded into the few-shot axis, and 셀4's cost-control
+  rationale doesn't apply once granularity stops at category level). Saved to
+  `docs/experiments/structure_plan_2026-08-10.md` (Notion-paste-ready) and the shared
+  artifact map is now stale relative to it.
+- **Hard constraint found by reading eval-agent's actual code** (read-only): predictions
+  must include a specific `rule_id` — `matcher.py` derives category from it for bucketing,
+  `verifier.py` checks exact equality. No rule_id → no valid recall/precision, even for the
+  few-shot-only structure variants.
+- `cell3r.py` (rule-level dispatch) built and tested this session, then shelved (not
+  deleted) once the above matrix superseded it.
+- **User's closing instruction, now the top priority for the next session**: stop
+  experimenting for now, ship one working version as an actual demo service first. Scope
+  (which structure/model, what "demo" means, credit source) is NOT decided — next session
+  must clarify with the user before writing code.
+
+### Next
+
+See `docs/handoff_2026-08-09_model-pilot-and-demo.md`'s "다음 세션이 즉시 해야 할 일" —
+short version: clarify demo scope with the user, don't touch the gateway (credit is at
+zero), set up eval-agent's `.env` before trying to run it.
