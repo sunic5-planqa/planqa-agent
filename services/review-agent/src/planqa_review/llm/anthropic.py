@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+import os
+import time
+from typing import Any
+
+import anthropic
+
+from planqa_review.llm.base import CallStats, LLMClient, parse_json_response
+
+DEFAULT_MODEL = "claude-sonnet-5"
+
+# Confirm-stage prompts repeat full chunk text per screened candidate (see confirmer.py),
+# so a generous ceiling avoids truncating a legitimate multi-candidate response.
+_DEFAULT_MAX_TOKENS = 8192
+_MAX_ATTEMPTS = 4
+_RETRY_DELAY_SECONDS = 5.0
+
+
+def _load_api_key(explicit: str | None) -> str:
+    key = explicit or os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        raise RuntimeError("No Anthropic API key found — set ANTHROPIC_API_KEY in .env")
+    return key
+
+
+class AnthropicClient(LLMClient):
+    """Direct Anthropic API access (not a shared gateway) — for the demo confirm stage,
+    where the team pays for its own Claude credit."""
+
+    def __init__(
+        self,
+        model: str = DEFAULT_MODEL,
+        api_key: str | None = None,
+        temperature: float = 0.0,
+        max_tokens: int = _DEFAULT_MAX_TOKENS,
+        client: anthropic.Anthropic | None = None,
+    ) -> None:
+        self.model = model
+        self._temperature = temperature
+        self._max_tokens = max_tokens
+        self.usage: list[CallStats] = []
+        self._client = client or anthropic.Anthropic(api_key=_load_api_key(api_key))
+
+    def complete_json(self, *, system: str, prompt: str) -> Any:
+        start = time.perf_counter()
+        last_error: anthropic.APIStatusError | None = None
+        for attempt in range(_MAX_ATTEMPTS):
+            try:
+                # `temperature` is rejected outright ("deprecated for this model", a real
+                # 400 seen live against claude-sonnet-5) — this frontier tier doesn't expose
+                # sampling control the way older models did. `self._temperature` is kept as
+                # a stored attribute (factory/tests still read it) but never sent on the wire.
+                # Extended thinking is on by default for this model and isn't useful for a
+                # fixed-schema JSON QA task — seen live to roughly 10x call latency, and once
+                # to burn the entire max_tokens budget on thinking with zero text left over
+                # (a response containing only a ThinkingBlock). Disable it explicitly.
+                response = self._client.messages.create(
+                    model=self.model,
+                    max_tokens=self._max_tokens,
+                    thinking={"type": "disabled"},
+                    system=system,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+            except anthropic.APIStatusError as error:
+                if error.status_code == 429 or error.status_code >= 500:
+                    last_error = error
+                    if attempt < _MAX_ATTEMPTS - 1:
+                        time.sleep(_RETRY_DELAY_SECONDS)
+                    continue
+                raise
+            usage = response.usage
+            self.usage.append(
+                CallStats(
+                    elapsed_seconds=time.perf_counter() - start,
+                    prompt_tokens=usage.input_tokens,
+                    completion_tokens=usage.output_tokens,
+                    total_tokens=usage.input_tokens + usage.output_tokens,
+                )
+            )
+            # claude-sonnet-5 can prepend a ThinkingBlock before the actual answer — the
+            # real text isn't reliably at content[0], so scan for the first text block.
+            text_block = next((block for block in response.content if block.type == "text"), None)
+            if text_block is None:
+                raise ValueError(f"no text block in Anthropic response (types: {[b.type for b in response.content]})")
+            return parse_json_response(text_block.text)
+        raise last_error

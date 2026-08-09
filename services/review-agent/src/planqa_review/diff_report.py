@@ -49,15 +49,12 @@ def _usage_map_dict(usage_map: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
-def to_json_dict(result: ReviewResult, stats: RunStats | None = None) -> list[dict[str, Any]] | dict[str, Any]:
-    """Matches eval-agent's common Issue schema field-for-field (plus the
-    original_text/rationale/fix_direction the diff view needs, which that parser ignores
-    but doesn't choke on) — this file can be handed straight to
-    `planqa-eval evaluate --predictions <this file>` from within eval-agent/. That parser
-    also accepts the {"issues": [...]} wrapper, so passing `stats` (profile/model/time/
-    token/rulebook-version cost of this run, for comparing experiments) stays compatible
-    without a separate file."""
-    issues = [
+def issue_dicts(result: ReviewResult) -> list[dict[str, Any]]:
+    """The per-issue field mapping shared by `to_json_dict` (single document) and any
+    caller that needs to merge several documents' issues into one predictions file (e.g.
+    a multi-document model pilot, where eval-agent needs several docs' worth of issues at
+    once for recall/precision to mean anything)."""
+    return [
         {
             "issue_id": issue.issue_id or _issue_id(result.doc_id, i),
             "doc_id": issue.doc_id,
@@ -69,9 +66,21 @@ def to_json_dict(result: ReviewResult, stats: RunStats | None = None) -> list[di
             "original_text": issue.original_text,
             "rationale": issue.rationale,
             "fix_direction": issue.fix_direction,
+            "related_location": issue.related_location,
         }
         for i, issue in enumerate(result.issues)
     ]
+
+
+def to_json_dict(result: ReviewResult, stats: RunStats | None = None) -> list[dict[str, Any]] | dict[str, Any]:
+    """Matches eval-agent's common Issue schema field-for-field (plus the
+    original_text/rationale/fix_direction the diff view needs, which that parser ignores
+    but doesn't choke on) — this file can be handed straight to
+    `planqa-eval evaluate --predictions <this file>` from within eval-agent/. That parser
+    also accepts the {"issues": [...]} wrapper, so passing `stats` (profile/model/time/
+    token/rulebook-version cost of this run, for comparing experiments) stays compatible
+    without a separate file."""
+    issues = issue_dicts(result)
     if stats is None and not result.tier_errors:
         return issues
     payload: dict[str, Any] = {"issues": issues}
@@ -148,6 +157,8 @@ def to_markdown(result: ReviewResult, rulebook: RuleBook, stats: RunStats | None
         ]
         if issue.rationale:
             lines.append(f"- 근거: {issue.rationale}")
+        if issue.related_location:
+            lines.append(f"- 관련 위치: {issue.related_location}")
         lines.append("")
         diff = _diff_block(issue.original_text, issue.fix_direction)
         if diff:
