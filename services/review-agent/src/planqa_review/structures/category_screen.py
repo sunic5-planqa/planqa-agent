@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from planqa_review.dedupe import dedupe_issues
-from planqa_review.document import Chunk, parse_document
+from planqa_review.document import Chunk, DocumentTree, parse_document
 from planqa_review.instrumentation import CallEvent, record_call
 from planqa_review.llm.base import LLMClient
 from planqa_review.pipeline import ReviewResult
@@ -209,6 +210,60 @@ def _confirm_tier(
     return issues
 
 
+def _review_tier(
+    level: Level,
+    tree: DocumentTree,
+    rulebook: RuleBook,
+    doc_id: str,
+    global_context: str,
+    document_text: str,
+    screen_llm: LLMClient,
+    confirm_llm: LLMClient,
+) -> tuple[list[Issue], list[CallEvent], str | None]:
+    events: list[CallEvent] = []
+    chunks = list(tree.chunks_for(level))
+    rules = rules_for_tier(rulebook, level)
+    if not chunks or not rules:
+        return [], events, None
+    rules_by_category: dict[str, list[RuleDef]] = {}
+    for rule in rules:
+        rules_by_category.setdefault(rule.category, []).append(rule)
+    tier_rule_ids = tuple(rule.rule_id for rule in rules)
+    try:
+        candidates = record_call(
+            screen_llm,
+            stage="screen",
+            tier=level,
+            rule_ids=tier_rule_ids,
+            events=events,
+            call=lambda: _screen_tier(chunks, rules, global_context, screen_llm),
+        )
+        candidate_rule_ids = tuple(
+            sorted({rule.rule_id for c in candidates for rule in rules_by_category.get(c.category, ())})
+        )
+        issues = record_call(
+            confirm_llm,
+            stage="confirm",
+            tier=level,
+            rule_ids=candidate_rule_ids,
+            events=events,
+            call=lambda: _confirm_tier(
+                candidates,
+                chunks,
+                rules_by_category,
+                doc_id,
+                level,
+                global_context,
+                document_text,
+                rulebook,
+                confirm_llm,
+            ),
+        )
+        return issues, events, None
+    except Exception as error:  # noqa: BLE001 - one tier's failure shouldn't sink the whole review
+        return [], events, f"{level.value} 위계 검토 실패: {error}"
+
+
 def review_document(
     doc_id: str, document_text: str, rulebook: RuleBook, screen_llm: LLMClient, confirm_llm: LLMClient
 ) -> ReviewResult:
@@ -234,48 +289,30 @@ def review_document(
     tree = parse_document(doc_id, document_text)
     all_issues: list[Issue] = []
 
-    for level in TIER_ORDER:
-        chunks = list(tree.chunks_for(level))
-        rules = rules_for_tier(rulebook, level)
-        if not chunks or not rules:
-            continue
-        rules_by_category: dict[str, list[RuleDef]] = {}
-        for rule in rules:
-            rules_by_category.setdefault(rule.category, []).append(rule)
-        tier_rule_ids = tuple(rule.rule_id for rule in rules)
-        try:
-            candidates = record_call(
-                screen_llm,
-                stage="screen",
-                tier=level,
-                rule_ids=tier_rule_ids,
-                events=events,
-                call=lambda: _screen_tier(chunks, rules, global_context, screen_llm),
+    # The 4 tiers only depend on the already-computed global_context, not on each other, so
+    # they run concurrently instead of the ~80s/call sequential loop this used to be. Each
+    # gets a cloned screen/confirm client (LLMClient.clone(); see its docstring — needed
+    # because record_call()'s usage-diffing races if threads share one client's usage
+    # list). Clone usage is merged back into the caller's original client objects below so
+    # cli.py's run-stats (which reads screen_llm.usage/confirm_llm.usage directly) still
+    # sees every call.
+    tier_clients = {level: (screen_llm.clone(tier=level), confirm_llm.clone(tier=level)) for level in TIER_ORDER}
+    with ThreadPoolExecutor(max_workers=len(TIER_ORDER)) as pool:
+        futures = {
+            level: pool.submit(
+                _review_tier, level, tree, rulebook, doc_id, global_context, document_text, *tier_clients[level]
             )
-            candidate_rule_ids = tuple(
-                sorted({rule.rule_id for c in candidates for rule in rules_by_category.get(c.category, ())})
-            )
-            issues = record_call(
-                confirm_llm,
-                stage="confirm",
-                tier=level,
-                rule_ids=candidate_rule_ids,
-                events=events,
-                call=lambda: _confirm_tier(
-                    candidates,
-                    chunks,
-                    rules_by_category,
-                    doc_id,
-                    level,
-                    global_context,
-                    document_text,
-                    rulebook,
-                    confirm_llm,
-                ),
-            )
+            for level in TIER_ORDER
+        }
+        for level, future in futures.items():
+            issues, tier_events, error = future.result()
             all_issues.extend(issues)
-        except Exception as error:  # noqa: BLE001 - see above
-            tier_errors.append(f"{level.value} 위계 검토 실패: {error}")
+            events.extend(tier_events)
+            if error:
+                tier_errors.append(error)
+            tier_screen_clone, tier_confirm_clone = tier_clients[level]
+            screen_llm.usage.extend(tier_screen_clone.usage)
+            confirm_llm.usage.extend(tier_confirm_clone.usage)
 
     return ReviewResult(
         doc_id=doc_id,

@@ -696,3 +696,52 @@ uv workspace 모노레포로 재구성하는 별도 작업을 사용자가 명�
 - §1 "부재 확인형" 예외(LG-01/TC-02 항상 문서 위계 전용)는 upstream에도 없는 별개 설계
   작업 — 다음에 review-agent 팀이 다룰 것.
 - `planqa-backend`의 벤더링 사본(이슈 #7)은 별도 레포라 여기서 안 고침.
+
+## 2026-08-10 — category_screen의 4개 위계 병렬 실행 (셀3 방향과 별개, 순수 속도 개선)
+
+Haiku 스크리닝/Sonnet 정밀판정으로 라이브 검증했을 때 문서 1건에 호출당 ~80초, 4개 위계 x
+스크리닝+정밀판정 순차 실행이라 최대 12분까지 걸렸음 — 사용자 요청으로 병렬화.
+
+### Done
+
+- `category_screen.review_document()`: Document/Logical Unit/Paragraph/Sentence 4개 위계는
+  이미 계산된 `global_context`에만 의존하고 서로 독립적이므로, `ThreadPoolExecutor`로
+  동시 실행하도록 재작성. baseline(`pipeline.py`, 제안5)은 손 안 댐 — ablation 비교 기준점
+  고정 유지.
+- **스레드 안전성 문제 발견 및 해결**: `instrumentation.record_call()`은 `len(llm.usage)`
+  전/후 diff로 각 호출의 `CallStats`를 귀속시키는데, 4개 위계가 같은 `screen_llm`/
+  `confirm_llm` 인스턴스를 동시에 호출하면 이 diff가 레이스 컨디션에 걸림(한 위계의 호출이
+  다른 위계 것으로 잘못 귀속되거나 누락될 수 있음). 잠금(lock)으로 그 부분만 감싸는 방식은
+  네트워크 호출 자체가 잠금 밖에 있어야 병렬화 의미가 있는데, `llm.usage`에 append하는
+  시점은 `complete_json` 내부라 잠금으로 정확히 분리할 수 없음 — 결국 위계마다 독립된
+  client 인스턴스가 필요하다고 결론.
+- `LLMClient`(공통 인프라, baseline 전용 아님)에 `clone(*, tier=None) -> LLMClient` 메서드
+  추가 — 기본 구현은 `type(self)(model=self.model, temperature=self._temperature)`로 각
+  백엔드(Gemini/Ollama/Anthropic)가 env에서 credential을 새로 읽는 방식 그대로 재사용.
+  `review_document`는 위계별로 `screen_llm.clone(tier=level)`/`confirm_llm.clone(tier=level)`
+  로 독립 클라이언트를 만들고(메인 스레드에서 순차적으로, 스레드풀 시작 전), 각 위계의
+  스레드가 끝나면 그 클론의 `.usage`를 원본 client 객체에 다시 merge — `cli.py`의
+  run-stats가 `screen_llm.usage`/`confirm_llm.usage`를 직접 읽으므로 이 merge가 없으면
+  최종 통계가 과소 집계됨.
+- **테스트 인프라도 같이 손볼 수밖에 없었음**: 기존 `ScriptedLLM` 기반 6개 테스트는
+  "호출 순서 == 위계 순서"를 전제로 응답 리스트를 인덱스로 스크립트했는데, 진짜 동시
+  실행에서는 어느 위계가 먼저 호출을 마치는지 보장이 없어 이 전제가 깨짐(스레드
+  스케줄링에 따라 flaky해질 위험). `ScriptedLLM`에 `tier_responses`(TIER_ORDER 정렬
+  리스트)와 `clone(tier=)` 지원을 추가해 위계 정체성 기반으로 라우팅하도록 재설계, 6개
+  테스트를 위계-키 방식으로 재작성 (`test_review_document_isolates_a_single_tier_failure`의
+  "첫 호출이 실패" 가정도 "Document 위계 호출이 실패"로 tier-aware하게 수정).
+- 109/109 테스트 통과, `test_category_screen.py` 단독 5회 반복 실행으로 flaky 여부 확인
+  (전부 그린).
+- 라이브 검증(DOC-001, category_screen, Haiku 스크리닝/Sonnet 정밀판정, Anthropic 백엔드):
+  2회 실행 50.4초/58.4초 (직전 세션의 동일 설정 순차 실행 대비 큰 폭 단축). `review.json`의
+  `stats` 확인 — `screen.call_count=4`, `confirm.call_count=5`(context 1 + 위계 4),
+  `by_tier`에 4개 위계 각각 정확히 2콜(스크리닝+정밀판정)로 집계됨 — usage merge-back이
+  정확히 동작함을 실측으로 확인. 첫 실행에서 Sentence 위계가 JSON 파싱 실패로 1건 빠졌지만
+  기존에도 있던 위계별 격리(`tier_errors`) 덕에 나머지 3개 위계 결과(12건)는 정상 반환 —
+  재실행 시 실패 없이 14건 반환되어 동시성 버그가 아니라 기존에도 있던 모델 응답 flaky함
+  이었음을 확인.
+
+### Next
+
+- `pipeline.py`(baseline)는 이번에 손 안 댐 — 필요하면 별도로 논의.
+- 셀3(카테고리별 독립 호출 병렬 실행) 선행 작업 재개 여부는 여전히 미답변으로 남아있음.
