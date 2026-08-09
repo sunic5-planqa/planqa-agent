@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import re
 
-from planqa_review.schema import Issue
+from planqa_review.rulebook import RuleBook
+from planqa_review.schema import Issue, Level
 
 # "<title>(DOC-XXX) 참고/참조" style citation, e.g. "반품/교환 정책서(DOC-005) 참고."
 _CITATION = re.compile(
@@ -46,3 +47,23 @@ def has_valid_reference_exception(golden_issue: Issue, source_text: str | None) 
         if _CITATION.search(block) and any(keyword in block for keyword in keywords):
             return True
     return False
+
+
+def is_reference_excused_by_rule(
+    rule_id: str, rulebook: RuleBook, original_text: str, doc_id: str, level: Level, location: str, source_text: str
+) -> bool:
+    # Shared wrapper for the §3 check above — takes a rule_id + rulebook instead of a
+    # pre-built Issue, since callers (confirm-stage code) usually have those pieces
+    # separately before an Issue exists yet. verifier.py is common ground for every
+    # structure/profile (not baseline-specific), so this is safe for any of them to import.
+    if rule_id not in rulebook.reference_exception_rule_ids:
+        return False
+    probe = Issue(
+        doc_id=doc_id,
+        level=level.value,
+        rule_id=rule_id,
+        location=location,
+        description="",
+        original_text=original_text,
+    )
+    return has_valid_reference_exception(probe, source_text)

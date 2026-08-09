@@ -66,6 +66,7 @@ def issue_dicts(result: ReviewResult) -> list[dict[str, Any]]:
             "original_text": issue.original_text,
             "rationale": issue.rationale,
             "fix_direction": issue.fix_direction,
+            "related_location": issue.related_location,
         }
         for i, issue in enumerate(result.issues)
     ]
@@ -156,6 +157,8 @@ def to_markdown(result: ReviewResult, rulebook: RuleBook, stats: RunStats | None
         ]
         if issue.rationale:
             lines.append(f"- 근거: {issue.rationale}")
+        if issue.related_location:
+            lines.append(f"- 관련 위치: {issue.related_location}")
         lines.append("")
         diff = _diff_block(issue.original_text, issue.fix_direction)
         if diff:

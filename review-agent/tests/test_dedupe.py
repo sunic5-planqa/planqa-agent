@@ -4,8 +4,15 @@ from planqa_review.dedupe import dedupe_issues
 from planqa_review.schema import Issue
 
 
-def _issue(rule_id: str, level: str, location: str) -> Issue:
-    return Issue(doc_id="DOC-TEST", level=level, rule_id=rule_id, location=location, description="d")
+def _issue(rule_id: str, level: str, location: str, related_location: str | None = None) -> Issue:
+    return Issue(
+        doc_id="DOC-TEST",
+        level=level,
+        rule_id=rule_id,
+        location=location,
+        description="d",
+        related_location=related_location,
+    )
 
 
 def test_dedupe_keeps_finer_tier_when_locations_are_identical():
@@ -32,3 +39,24 @@ def test_dedupe_keeps_both_when_locations_are_unrelated():
     a = _issue("MI-01", "Paragraph", "1. 목적")
     b = _issue("MI-01", "Paragraph", "2. 기능")
     assert set(dedupe_issues([a, b])) == {a, b}
+
+
+def test_dedupe_keeps_both_relational_findings_with_different_related_location():
+    # Same rule/location but two genuinely different relational findings (2-2 contradicts
+    # both 1-3 and 3-1) — collapsing these would silently drop one, defeating the whole
+    # point of related_location.
+    a = _issue("LG-02", "Paragraph", "2-2", related_location="1-3")
+    b = _issue("LG-02", "Paragraph", "2-2", related_location="3-1")
+    assert set(dedupe_issues([a, b])) == {a, b}
+
+
+def test_dedupe_still_collapses_when_related_location_matches():
+    coarse = _issue("LG-02", "Logical Unit", "2. 배경", related_location="1-3")
+    fine = _issue("LG-02", "Paragraph", "2. 배경 > 2-2", related_location="1-3")
+    assert dedupe_issues([coarse, fine]) == [fine]
+
+
+def test_dedupe_still_collapses_when_only_one_side_has_related_location():
+    coarse = _issue("LG-02", "Logical Unit", "2. 배경")
+    fine = _issue("LG-02", "Paragraph", "2. 배경 > 2-2", related_location="1-3")
+    assert dedupe_issues([coarse, fine]) == [fine]

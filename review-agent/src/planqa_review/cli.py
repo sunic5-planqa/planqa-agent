@@ -43,10 +43,19 @@ def cmd_review(args: argparse.Namespace) -> int:
     profile_label = args.structure or args.profile
 
     # Two separate clients so the cheap screening pass and the precise confirm pass can run
-    # different models (even different backends) — see docs/review_agent_architecture.md.
-    screen_llm = build_llm_client(args.backend, args.screen_model, args.temperature)
-    confirm_llm = build_llm_client(args.backend, args.verify_model, args.temperature)
-    backend_name = args.backend or os.environ.get("PLANQA_LLM_BACKEND") or "gemini"
+    # different models — and, via --screen-backend/--confirm-backend, different backends
+    # entirely (e.g. demo: Gemini screen + Claude confirm) — see docs/review_agent_architecture.md.
+    screen_backend = args.screen_backend or args.backend
+    confirm_backend = args.confirm_backend or args.backend
+    screen_llm = build_llm_client(screen_backend, args.screen_model, args.temperature)
+    confirm_llm = build_llm_client(confirm_backend, args.verify_model, args.temperature)
+    resolved_screen_backend = screen_backend or os.environ.get("PLANQA_LLM_BACKEND") or "gemini"
+    resolved_confirm_backend = confirm_backend or os.environ.get("PLANQA_LLM_BACKEND") or "gemini"
+    backend_name = (
+        resolved_screen_backend
+        if resolved_screen_backend == resolved_confirm_backend
+        else f"{resolved_screen_backend}+{resolved_confirm_backend}"
+    )
 
     start = time.perf_counter()
     if args.structure:
@@ -121,7 +130,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     review_parser.add_argument("--rulebook", type=Path, default=DEFAULT_RULEBOOK)
     review_parser.add_argument("--out", type=Path, default=None, help="생략 시 outputs/review/<timestamp>/")
-    review_parser.add_argument("--backend", default=None, help="overrides PLANQA_LLM_BACKEND (gemini|ollama)")
+    review_parser.add_argument(
+        "--backend", default=None, help="overrides PLANQA_LLM_BACKEND (gemini|ollama|gateway|anthropic) — both roles unless overridden below"
+    )
+    review_parser.add_argument("--screen-backend", default=None, help="스크리닝 전용 백엔드 — 생략 시 --backend 사용")
+    review_parser.add_argument("--confirm-backend", default=None, help="정밀판정 전용 백엔드 — 생략 시 --backend 사용")
     review_parser.add_argument("--screen-model", default=None, help="1단계 스크리닝용 모델(저비용)")
     review_parser.add_argument("--verify-model", default=None, help="2단계 정밀판정/컨텍스트 추출용 모델(고비용)")
     review_parser.add_argument(
