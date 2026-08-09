@@ -48,7 +48,9 @@ class GatewayClient(LLMClient):
         self._client = client or httpx.Client(
             base_url=base_url,
             headers={"Authorization": f"Bearer {_load_api_key(api_key)}", "User-Agent": _USER_AGENT},
-            timeout=120.0,
+            # EXAONE (236B) measured 60s+ on a trivial one-line prompt during smoke testing —
+            # real pipeline prompts (full document + rules) need real headroom above that.
+            timeout=240.0,
         )
 
     def complete_json(self, *, system: str, prompt: str) -> Any:
