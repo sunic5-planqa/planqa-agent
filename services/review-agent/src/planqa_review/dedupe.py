@@ -13,6 +13,17 @@ def _locations_overlap(a: str, b: str) -> bool:
     return a == b or a.startswith(f"{b} > ") or b.startswith(f"{a} > ")
 
 
+def _same_relation(a: Issue, b: Issue) -> bool:
+    # LG/LF/GA findings carry a second location (related_location) — two issues that
+    # otherwise look like duplicates (same rule_id, overlapping location) but point at
+    # different related_location values are two distinct relational findings, not a
+    # coarse/fine repeat of the same one. Only treat them as the same relation (dedupe-able)
+    # when at least one side has no related_location to disagree with.
+    if a.related_location is None or b.related_location is None:
+        return True
+    return a.related_location == b.related_location
+
+
 def dedupe_issues(issues: list[Issue]) -> list[Issue]:
     """5단계 — §2 assigns several categories (e.g. MI) to more than one tier, so the same
     underlying problem can get flagged at both a coarse and a fine granularity. Collapse
@@ -22,7 +33,9 @@ def dedupe_issues(issues: list[Issue]) -> list[Issue]:
     kept: list[Issue] = []
     for issue in ordered:
         if any(
-            issue.rule_id == existing.rule_id and _locations_overlap(issue.location, existing.location)
+            issue.rule_id == existing.rule_id
+            and _locations_overlap(issue.location, existing.location)
+            and _same_relation(issue, existing)
             for existing in kept
         ):
             continue

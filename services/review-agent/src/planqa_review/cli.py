@@ -17,8 +17,9 @@ from planqa_review.experiment import ExperimentConfig, run_experiment, write_exp
 from planqa_review.models import DEFAULT_PROFILE, PROFILES
 from planqa_review.pipeline import review_document
 from planqa_review.run_stats import build_run_stats
-from planqa_schemas.rulebook import parse_rulebook
 from planqa_review.scoring import load_golden_rows
+from planqa_review.structures import STRUCTURES
+from planqa_schemas.rulebook import parse_rulebook
 
 DEFAULT_RULEBOOK = Path("data/rulebook/rulebook_v1.0.md")
 
@@ -36,18 +37,33 @@ def cmd_review(args: argparse.Namespace) -> int:
     document_text = args.input.read_text(encoding="utf-8")
     doc_id = args.doc_id or _infer_doc_id(args.input)
     rulebook = parse_rulebook(args.rulebook)
-    profile = PROFILES[args.profile]
+
+    # --structure picks a non-baseline review_fn (see structures/) — useful for a quick
+    # single-document smoke test of a new structure before committing to a full benchmark run.
+    profile_label = args.structure or args.profile
 
     # Two separate clients so the cheap screening pass and the precise confirm pass can run
-    # different models (even different backends) — see docs/review_agent_architecture.md.
-    screen_llm = build_llm_client(args.backend, args.screen_model, args.temperature)
-    confirm_llm = build_llm_client(args.backend, args.verify_model, args.temperature)
-    backend_name = args.backend or os.environ.get("PLANQA_LLM_BACKEND") or "gemini"
+    # different models — and, via --screen-backend/--confirm-backend, different backends
+    # entirely (e.g. demo: Gemini screen + Claude confirm) — see docs/review_agent_architecture.md.
+    screen_backend = args.screen_backend or args.backend
+    confirm_backend = args.confirm_backend or args.backend
+    screen_llm = build_llm_client(screen_backend, args.screen_model, args.temperature)
+    confirm_llm = build_llm_client(confirm_backend, args.verify_model, args.temperature)
+    resolved_screen_backend = screen_backend or os.environ.get("PLANQA_LLM_BACKEND") or "gemini"
+    resolved_confirm_backend = confirm_backend or os.environ.get("PLANQA_LLM_BACKEND") or "gemini"
+    backend_name = (
+        resolved_screen_backend
+        if resolved_screen_backend == resolved_confirm_backend
+        else f"{resolved_screen_backend}+{resolved_confirm_backend}"
+    )
 
     start = time.perf_counter()
-    result = review_document(doc_id, document_text, rulebook, screen_llm, confirm_llm, profile)
+    if args.structure:
+        result = STRUCTURES[args.structure](doc_id, document_text, rulebook, screen_llm, confirm_llm)
+    else:
+        result = review_document(doc_id, document_text, rulebook, screen_llm, confirm_llm, PROFILES[args.profile])
     stats = build_run_stats(
-        profile=args.profile,
+        profile=profile_label,
         backend=backend_name,
         rulebook_path=args.rulebook,
         screen_llm=screen_llm,
@@ -56,9 +72,9 @@ def cmd_review(args: argparse.Namespace) -> int:
         call_events=result.call_events,
     )
 
-    # Profile name in the default path so `outputs/` makes the originating agent
+    # Profile/structure name in the default path so `outputs/` makes the originating
     # structure obvious at a glance, not just a bare timestamp.
-    out_dir = args.out or Path("outputs/review") / args.profile / _timestamp()
+    out_dir = args.out or Path("outputs/review") / profile_label / _timestamp()
     json_path, md_path = write_report(out_dir, result, rulebook, stats)
     # Real (non-benchmark/experiment) review only, so ablation runs don't spam eval-service
     # with synthetic traffic. Print first so the summary shows up immediately, then join —
@@ -115,7 +131,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     review_parser.add_argument("--rulebook", type=Path, default=DEFAULT_RULEBOOK)
     review_parser.add_argument("--out", type=Path, default=None, help="생략 시 outputs/review/<timestamp>/")
-    review_parser.add_argument("--backend", default=None, help="overrides PLANQA_LLM_BACKEND (gemini|ollama)")
+    review_parser.add_argument(
+        "--backend",
+        default=None,
+        help="overrides PLANQA_LLM_BACKEND (gemini|ollama|anthropic) — both roles unless overridden below",
+    )
+    review_parser.add_argument("--screen-backend", default=None, help="스크리닝 전용 백엔드 — 생략 시 --backend 사용")
+    review_parser.add_argument("--confirm-backend", default=None, help="정밀판정 전용 백엔드 — 생략 시 --backend 사용")
     review_parser.add_argument("--screen-model", default=None, help="1단계 스크리닝용 모델(저비용)")
     review_parser.add_argument("--verify-model", default=None, help="2단계 정밀판정/컨텍스트 추출용 모델(고비용)")
     review_parser.add_argument(
@@ -128,7 +150,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile",
         default=DEFAULT_PROFILE,
         choices=sorted(PROFILES),
-        help="프롬프트/로직 전략 (src/planqa_review/models/) — 모델 실험용",
+        help="프롬프트/로직 전략 (src/planqa_review/models/) — --structure 미지정 시(제안5 baseline) 적용",
+    )
+    review_parser.add_argument(
+        "--structure",
+        default=None,
+        choices=sorted(STRUCTURES),
+        help="구조 ablation용 — 지정 시 baseline(제안5) 대신 이 구조(src/planqa_review/structures/)로 실행, --profile은 무시됨",
     )
     review_parser.set_defaults(func=cmd_review)
 

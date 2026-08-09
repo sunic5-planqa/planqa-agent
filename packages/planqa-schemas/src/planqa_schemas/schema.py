@@ -39,3 +39,8 @@ class Issue:
     original_text: str | None = None
     rationale: str | None = None
     fix_direction: str | None = None
+    # LG(논리 비약)/LF(논리 흐름)/GA(상위 목표와의 정합성)는 정의상 두 위치 간의 관계
+    # 오류라 프론트가 "범위 프레임"을 그리려면 두 번째 위치가 필요함 — 그 외 카테고리는
+    # 단일 위치 오류라 항상 None. 채워지는 곳: confirm 단계 verdict 응답.
+    # (github.com/sunic5-planqa/planqa-agent issue #4)
+    related_location: str | None = None

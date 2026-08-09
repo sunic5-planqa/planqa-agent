@@ -10,6 +10,7 @@ from planqa_review.llm.ollama import OllamaClient
 @pytest.fixture(autouse=True)
 def _fake_gemini_key(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "fake-key-for-tests")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-anthropic-key-for-tests")
 
 
 def test_build_llm_client_defaults_temperature_to_zero():
@@ -26,6 +27,14 @@ def test_build_llm_client_ollama_gets_temperature_too():
     llm = build_llm_client("ollama", "fake-model", temperature=0.3)
     assert isinstance(llm, OllamaClient)
     assert llm._temperature == 0.3
+
+
+def test_build_llm_client_anthropic_gets_temperature_too():
+    from planqa_review.llm.anthropic import AnthropicClient
+
+    llm = build_llm_client("anthropic", "claude-sonnet-5", temperature=0.5)
+    assert isinstance(llm, AnthropicClient)
+    assert llm._temperature == 0.5
 
 
 def test_gemini_client_default_temperature_is_zero():
