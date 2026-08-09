@@ -6,12 +6,31 @@ from planqa_review.dedupe import dedupe_issues
 from planqa_review.document import Chunk, parse_document
 from planqa_review.instrumentation import CallEvent, record_call
 from planqa_review.llm.base import LLMClient
-from planqa_review.models.gemini_lite.context import extract_global_context
 from planqa_review.pipeline import ReviewResult
 from planqa_review.tiers import TIER_ORDER, rules_for_tier
-from planqa_review.verifier import has_valid_reference_exception
+from planqa_review.verifier import is_reference_excused_by_rule
 from planqa_schemas.rulebook import RuleBook, RuleDef
 from planqa_schemas.schema import Issue, Level
+
+# Duplicated rather than imported from models/gemini_lite/context.py — that module is
+# baseline structure code (제안5) this structure must not depend on or touch, per the
+# additive-only rule (same reasoning as the §3 check below, which *can* come from
+# verifier.py since that module is shared ground, not baseline-specific).
+_GLOBAL_CONTEXT_SYSTEM = (
+    "You read one Korean product-planning document (기획서) and produce a compact context "
+    "summary that will be prepended to every later review prompt about this same document, "
+    "so it must stand on its own without the full document attached. Capture: the "
+    "document's core purpose, its key policies/constraints, and its target KPIs/goals — "
+    "exactly what a reviewer needs to judge whether *other* sections of the document stay "
+    "consistent with what this document set out to do. Keep it to a few sentences.\n"
+    'Respond with JSON only: {"summary": "<compact Korean summary>"}'
+)
+
+
+def _extract_global_context(document_text: str, llm: LLMClient) -> str:
+    response = llm.complete_json(system=_GLOBAL_CONTEXT_SYSTEM, prompt=document_text)
+    summary = response.get("summary") if isinstance(response, dict) else None
+    return summary.strip() if isinstance(summary, str) and summary.strip() else ""
 
 # 데모 v1 구조: 위계형 청킹 + 콜통합(baseline/제안5와 동일)은 그대로 두되, 스크리닝 단계는
 # 룰 텍스트 대신 카테고리 라벨만 받는 더 가벼운 프롬프트로 바뀐다 — 구체적으로 어떤 룰을
@@ -77,10 +96,15 @@ def _build_screen_prompt(chunks: list[Chunk], rules: list[RuleDef], global_conte
     category_block = "\n".join(f"{code}: {label}" for code, label in _category_labels(rules).items())
     chunk_block = "\n\n".join(f"[{i}] ({chunk.location})\n{chunk.text}" for i, chunk in enumerate(chunks))
     context_block = f"Document context:\n{global_context}\n\n" if global_context else ""
-    return f"{context_block}Categories to check:\n{category_block}\n\nChunks:\n{chunk_block}\n\nReturn the candidates JSON."
+    return (
+        f"{context_block}Categories to check:\n{category_block}\n\nChunks:\n{chunk_block}\n\n"
+        "Return the candidates JSON."
+    )
 
 
-def _screen_tier(chunks: list[Chunk], rules: list[RuleDef], global_context: str, llm: LLMClient) -> list[_CategoryCandidate]:
+def _screen_tier(
+    chunks: list[Chunk], rules: list[RuleDef], global_context: str, llm: LLMClient
+) -> list[_CategoryCandidate]:
     response = llm.complete_json(system=_SCREEN_SYSTEM, prompt=_build_screen_prompt(chunks, rules, global_context))
     raw = response.get("candidates", []) if isinstance(response, dict) else []
     valid_categories = set(_category_labels(rules))
@@ -103,12 +127,15 @@ def _screen_tier(chunks: list[Chunk], rules: list[RuleDef], global_context: str,
     return candidates
 
 
-def _candidate_block(index: int, candidate: _CategoryCandidate, chunk: Chunk, category_rules: list[RuleDef]) -> str:
+def _candidate_block(
+    index: int, candidate: _CategoryCandidate, chunk: Chunk, category_rules: list[RuleDef]
+) -> str:
     rule_lines = "\n".join(
         f"    {rule.rule_id}: {rule.text} (exception: {rule.exception_text or '없음'})" for rule in category_rules
     )
     return (
-        f"[{index}] category {candidate.category} ({category_rules[0].category_label}) — candidate rules:\n{rule_lines}\n"
+        f"[{index}] category {candidate.category} ({category_rules[0].category_label}) — candidate rules:\n"
+        f"{rule_lines}\n"
         f"  location: {chunk.location}\n"
         f"  full unit text: {chunk.text!r}\n"
         f"  screened span: {candidate.quoted_text!r} (screening reason: {candidate.reason})"
@@ -119,18 +146,6 @@ def _build_confirm_prompt(resolved: list[tuple[_CategoryCandidate, Chunk, list[R
     blocks = "\n\n".join(_candidate_block(i, c, chunk, rules) for i, (c, chunk, rules) in enumerate(resolved))
     context_block = f"Document context:\n{global_context}\n\n" if global_context else ""
     return f"{context_block}{blocks}\n\nReturn the verdicts JSON."
-
-
-def _is_reference_excused(
-    rule_id: str, rulebook: RuleBook, original_text: str, doc_id: str, level: Level, location: str, source_text: str
-) -> bool:
-    """Same §3 deterministic proxy gemini_lite's confirmer.py uses — duplicated rather than
-    imported since that module is baseline structure code (제안5) this structure must not
-    depend on or touch, per the additive-only rule."""
-    if rule_id not in rulebook.reference_exception_rule_ids:
-        return False
-    probe = Issue(doc_id=doc_id, level=level.value, rule_id=rule_id, location=location, description="", original_text=original_text)
-    return has_valid_reference_exception(probe, source_text)
 
 
 def _confirm_tier(
@@ -168,7 +183,7 @@ def _confirm_tier(
         if rule_id not in {rule.rule_id for rule in category_rules}:
             continue  # model named a rule outside its given category's set — reject rather than trust
         original_text = str(values.get("original_text") or candidate.quoted_text).strip()
-        excused = bool(values.get("excused")) or _is_reference_excused(
+        excused = bool(values.get("excused")) or is_reference_excused_by_rule(
             rule_id, rulebook, original_text, doc_id, level, chunk.location, source_text
         )
         if excused:
@@ -197,9 +212,9 @@ def _confirm_tier(
 def review_document(
     doc_id: str, document_text: str, rulebook: RuleBook, screen_llm: LLMClient, confirm_llm: LLMClient
 ) -> ReviewResult:
-    """데모 v1 구조 — 위계형 청킹 + 콜통합은 baseline(제안5)과 동일하지만, 스크리닝은 룰
-    텍스트가 아니라 카테고리 라벨만 받고, 정밀판정이 카테고리 내 룰 전체를 놓고 구체적
-    rule_id를 직접 고른다. 정적 퓨샷 예시는 아직 없음."""
+    # 데모 v1 구조 — 위계형 청킹 + 콜통합은 baseline(제안5)과 동일하지만, 스크리닝은 룰
+    # 텍스트가 아니라 카테고리 라벨만 받고, 정밀판정이 카테고리 내 룰 전체를 놓고 구체적
+    # rule_id를 직접 고른다. 정적 퓨샷 예시는 아직 없음.
     tier_errors: list[str] = []
     events: list[CallEvent] = []
 
@@ -210,7 +225,7 @@ def review_document(
             tier=None,
             rule_ids=(),
             events=events,
-            call=lambda: extract_global_context(document_text, confirm_llm),
+            call=lambda: _extract_global_context(document_text, confirm_llm),
         )
     except Exception as error:  # noqa: BLE001 - one tier's failure shouldn't sink the whole review
         global_context = ""
@@ -247,7 +262,15 @@ def review_document(
                 rule_ids=candidate_rule_ids,
                 events=events,
                 call=lambda: _confirm_tier(
-                    candidates, chunks, rules_by_category, doc_id, level, global_context, document_text, rulebook, confirm_llm
+                    candidates,
+                    chunks,
+                    rules_by_category,
+                    doc_id,
+                    level,
+                    global_context,
+                    document_text,
+                    rulebook,
+                    confirm_llm,
                 ),
             )
             all_issues.extend(issues)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import httpx
 import pytest
-from anthropic import APIStatusError
+from anthropic import APIConnectionError, APIStatusError
 from anthropic.types import Message, TextBlock, ThinkingBlock, Usage
 
 from planqa_review.llm.anthropic import AnthropicClient
@@ -12,6 +12,11 @@ def _status_error(status_code: int) -> APIStatusError:
     request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
     response = httpx.Response(status_code, request=request)
     return APIStatusError("boom", response=response, body=None)
+
+
+def _connection_error() -> APIConnectionError:
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    return APIConnectionError(request=request)
 
 
 def _message(content: str, input_tokens: int = 10, output_tokens: int = 5) -> Message:
@@ -128,6 +133,43 @@ def test_complete_json_reraises_non_retryable_error_immediately():
     with pytest.raises(APIStatusError):
         llm.complete_json(system="s", prompt="p")
     assert len(fake.messages.calls) == 1
+
+
+def test_temperature_is_sent_for_models_that_accept_it():
+    fake = _FakeAnthropic(lambda kwargs: _message('{"summary": "요약"}'))
+    llm = AnthropicClient(model="claude-3-5-haiku-20241022", api_key="fake-key", temperature=0.7, client=fake)
+    llm.complete_json(system="s", prompt="p")
+
+    call = fake.messages.calls[0]
+    assert call["temperature"] == 0.7
+
+
+def test_complete_json_retries_on_connection_error_then_succeeds(monkeypatch):
+    monkeypatch.setattr("planqa_review.llm.anthropic.time.sleep", lambda _seconds: None)
+    calls = {"count": 0}
+
+    def handler(kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise _connection_error()
+        return _message('{"summary": "요약"}')
+
+    llm, _ = _client_with_handler(handler)
+    result = llm.complete_json(system="s", prompt="p")
+
+    assert result == {"summary": "요약"}
+    assert calls["count"] == 2
+
+
+def test_complete_json_raises_after_exhausting_retries_on_persistent_connection_error(monkeypatch):
+    monkeypatch.setattr("planqa_review.llm.anthropic.time.sleep", lambda _seconds: None)
+
+    def handler(kwargs):
+        raise _connection_error()
+
+    llm, _ = _client_with_handler(handler)
+    with pytest.raises(APIConnectionError):
+        llm.complete_json(system="s", prompt="p")
 
 
 def test_missing_api_key_raises_clear_error(monkeypatch):

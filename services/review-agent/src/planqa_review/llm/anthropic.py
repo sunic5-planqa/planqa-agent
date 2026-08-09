@@ -16,6 +16,11 @@ _DEFAULT_MAX_TOKENS = 8192
 _MAX_ATTEMPTS = 4
 _RETRY_DELAY_SECONDS = 5.0
 
+# Models known to reject an explicit `temperature` outright (seen live: claude-sonnet-5 400s
+# with "deprecated for this model") — extend as other models turn out to share the
+# restriction. Anything not in this set gets `temperature` sent normally.
+_NO_TEMPERATURE_MODELS = {"claude-sonnet-5"}
+
 
 def _load_api_key(explicit: str | None) -> str:
     key = explicit or os.environ.get("ANTHROPIC_API_KEY")
@@ -25,9 +30,8 @@ def _load_api_key(explicit: str | None) -> str:
 
 
 class AnthropicClient(LLMClient):
-    """Direct Anthropic API access (not a shared gateway) — for the demo confirm stage,
-    where the team pays for its own Claude credit."""
-
+    # Direct Anthropic API access (not a shared gateway) — for the demo confirm stage,
+    # where the team pays for its own Claude credit.
     def __init__(
         self,
         model: str = DEFAULT_MODEL,
@@ -44,24 +48,23 @@ class AnthropicClient(LLMClient):
 
     def complete_json(self, *, system: str, prompt: str) -> Any:
         start = time.perf_counter()
-        last_error: anthropic.APIStatusError | None = None
+        last_error: anthropic.APIError | None = None
         for attempt in range(_MAX_ATTEMPTS):
-            try:
-                # `temperature` is rejected outright ("deprecated for this model", a real
-                # 400 seen live against claude-sonnet-5) — this frontier tier doesn't expose
-                # sampling control the way older models did. `self._temperature` is kept as
-                # a stored attribute (factory/tests still read it) but never sent on the wire.
+            kwargs: dict[str, Any] = dict(
+                model=self.model,
+                max_tokens=self._max_tokens,
                 # Extended thinking is on by default for this model and isn't useful for a
                 # fixed-schema JSON QA task — seen live to roughly 10x call latency, and once
                 # to burn the entire max_tokens budget on thinking with zero text left over
                 # (a response containing only a ThinkingBlock). Disable it explicitly.
-                response = self._client.messages.create(
-                    model=self.model,
-                    max_tokens=self._max_tokens,
-                    thinking={"type": "disabled"},
-                    system=system,
-                    messages=[{"role": "user", "content": prompt}],
-                )
+                thinking={"type": "disabled"},
+                system=system,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            if self.model not in _NO_TEMPERATURE_MODELS:
+                kwargs["temperature"] = self._temperature
+            try:
+                response = self._client.messages.create(**kwargs)
             except anthropic.APIStatusError as error:
                 if error.status_code == 429 or error.status_code >= 500:
                     last_error = error
@@ -69,6 +72,13 @@ class AnthropicClient(LLMClient):
                         time.sleep(_RETRY_DELAY_SECONDS)
                     continue
                 raise
+            except anthropic.APIConnectionError as error:
+                # Covers APITimeoutError too — no status_code to inspect here, but a
+                # connection-level failure/timeout is inherently transient, unlike a 4xx.
+                last_error = error
+                if attempt < _MAX_ATTEMPTS - 1:
+                    time.sleep(_RETRY_DELAY_SECONDS)
+                continue
             usage = response.usage
             self.usage.append(
                 CallStats(

@@ -132,7 +132,9 @@ def build_parser() -> argparse.ArgumentParser:
     review_parser.add_argument("--rulebook", type=Path, default=DEFAULT_RULEBOOK)
     review_parser.add_argument("--out", type=Path, default=None, help="생략 시 outputs/review/<timestamp>/")
     review_parser.add_argument(
-        "--backend", default=None, help="overrides PLANQA_LLM_BACKEND (gemini|ollama|anthropic) — both roles unless overridden below"
+        "--backend",
+        default=None,
+        help="overrides PLANQA_LLM_BACKEND (gemini|ollama|anthropic) — both roles unless overridden below",
     )
     review_parser.add_argument("--screen-backend", default=None, help="스크리닝 전용 백엔드 — 생략 시 --backend 사용")
     review_parser.add_argument("--confirm-backend", default=None, help="정밀판정 전용 백엔드 — 생략 시 --backend 사용")
