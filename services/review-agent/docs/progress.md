@@ -660,3 +660,39 @@ uv workspace 모노레포로 재구성하는 별도 작업을 사용자가 명�
 - 위 미답변 질문은 여전히 열려있음 — 다음 세션에서 확인 필요.
 - `planqa-backend`에 벤더링된 사본(`qa_engine/review_agent/`)에는 이 notify 훅이 아직 없음 —
   실서비스에 반영하려면 그쪽 ADR 0001의 기존 재동기화 절차를 별도로 밟아야 함.
+
+## 2026-08-09 — Re-synced TIER_CATEGORIES from feature/review-agent (GitHub 이슈 #6/#7)
+
+`feature/review-agent`에서 이 폴더를 `dev`로 복사해온 뒤, 그 브랜치에 `tiers.py`의
+`TIER_CATEGORIES`(위계별 룰 카테고리 매핑)가 8/5 룰북 개편 이전 값으로 굳어있던 버그를 고친
+커밋(`c04825f fix: correct TIER_CATEGORIES to match rulebook §2`, pforu)이 새로 올라왔는데
+`dev`엔 반영이 안 돼 있었음 — GitHub 이슈 #6(이 레포)/#7(`planqa-backend` 벤더링 사본, 별도
+레포라 여기선 손 안 댐)로 리포트됨.
+
+### Done
+
+- `tiers.py`의 `TIER_CATEGORIES`를 `feature/review-agent`의 고쳐진 값 그대로 재동기화
+  (문서 6→7개, 논리단위 5→8개(전체), 문단 2→7개, 문장 2→5개 카테고리 — 이전엔 문단 위계가
+  7개 중 2개만 체크하고 있었음). `rules_for_tier()`는 이 dict에서 순수하게 파생되므로 다른
+  코드 변경 불필요.
+- `test_tiers.py`에 `test_tier_categories_matches_rulebook_section_2` 이식 (upstream이
+  같은 커밋에서 추가한 회귀 테스트).
+- 87/87 테스트 통과 (기존 86 + 신규 1).
+
+### Notes
+
+- 이슈 #6 본문이 "`feature/review-agent`에 `ABSENCE_CHECK_RULE_IDS`까지 포함된 버전이
+  있다"고 언급했는데, 실제 `feature/review-agent`(fix 커밋 `c04825f` 포함, 그 이후 커밋까지
+  확인)엔 `ABSENCE_CHECK_RULE_IDS`가 존재하지 않음 — grep으로 0건 확인. §1의 "부재 확인형
+  (LG-01/TC-02는 항상 문서 위계에서만 체크)" 예외는 upstream에도 아직 구현 안 된 상태.
+  이번엔 실제로 존재하는 `TIER_CATEGORIES` 수정만 재동기화하고, 이 예외 로직은 새로
+  설계해야 하는 별개 작업이라 손 안 댐 — 이슈에 코멘트로 남겨둠.
+- upstream 기록 경고 그대로: 이 수정 이후로 review-agent를 실제로 돌리면(특히 문단/문장
+  위계) 과거 어떤 벤치마크 숫자보다 이슈가 더 많이 나올 것 — 버그가 있어서가 아니라 이제
+  진짜로 검토해야 할 카테고리를 다 검토하기 때문.
+
+### Next
+
+- §1 "부재 확인형" 예외(LG-01/TC-02 항상 문서 위계 전용)는 upstream에도 없는 별개 설계
+  작업 — 다음에 review-agent 팀이 다룰 것.
+- `planqa-backend`의 벤더링 사본(이슈 #7)은 별도 레포라 여기서 안 고침.
