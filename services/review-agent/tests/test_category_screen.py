@@ -3,9 +3,12 @@ from __future__ import annotations
 from conftest import ScriptedLLM
 
 from planqa_schemas.rulebook import parse_rulebook
+from planqa_schemas.schema import Level
 from planqa_review.structures.category_screen import review_document
 
 _DOC = "# 샘플 PRD\n\n## 1. 목적\n\n간단한 목적 설명입니다.\n"
+
+_EMPTY_CANDIDATES = {"candidates": []}
 
 
 def test_review_document_resolves_specific_rule_from_category_candidate(rulebook_path):
@@ -14,20 +17,21 @@ def test_review_document_resolves_specific_rule_from_category_candidate(rulebook
     rulebook = parse_rulebook(rulebook_path)
 
     screen_llm = ScriptedLLM(
-        [
-            {"candidates": []},  # Document tier
+        tier_responses=[
+            _EMPTY_CANDIDATES,  # Document tier
             {
                 "candidates": [
                     {"chunk_index": 0, "category": "MI", "quoted_text": "간단한 목적 설명입니다.", "reason": "목적 불명확"}
                 ]
             },  # Logical Unit tier
-            {"candidates": []},  # Paragraph tier
-            {"candidates": []},  # Sentence tier
+            _EMPTY_CANDIDATES,  # Paragraph tier
+            _EMPTY_CANDIDATES,  # Sentence tier
         ]
     )
     confirm_llm = ScriptedLLM(
-        [
-            {"summary": "이 문서는 홈 화면의 목적을 설명한다."},  # context
+        [{"summary": "이 문서는 홈 화면의 목적을 설명한다."}],  # context (uncloned, direct call)
+        tier_responses=[
+            None,  # Document tier — no candidates, confirm never called
             {
                 "verdicts": [
                     {
@@ -42,18 +46,21 @@ def test_review_document_resolves_specific_rule_from_category_candidate(rulebook
                         "excuse_reason": None,
                     }
                 ]
-            },  # Logical Unit confirm
-        ]
+            },  # Logical Unit tier
+            None,  # Paragraph tier
+            None,  # Sentence tier
+        ],
     )
 
     result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
 
     assert result.global_context == "이 문서는 홈 화면의 목적을 설명한다."
-    assert len(screen_llm.calls) == 4  # one per tier with chunks+rules
-    assert len(confirm_llm.calls) == 2  # 1 context + 1 confirm (only Logical Unit had candidates)
+    assert len(screen_llm.all_calls) == 4  # one per tier with chunks+rules
+    assert len(confirm_llm.all_calls) == 2  # 1 context + 1 confirm (only Logical Unit had candidates)
     # screening prompt must not leak rule text — only the category label
-    assert "MI-01" not in screen_llm.calls[1]["prompt"]
-    assert "MI" in screen_llm.calls[1]["prompt"]
+    logical_unit_prompt = screen_llm.clones[Level.LOGICAL_UNIT].calls[0]["prompt"]
+    assert "MI-01" not in logical_unit_prompt
+    assert "MI" in logical_unit_prompt
 
     [issue] = result.issues
     assert issue.rule_id == "MI-01"
@@ -74,16 +81,17 @@ def test_review_document_populates_related_location_for_relational_categories(ru
     rulebook = parse_rulebook(rulebook_path)
 
     screen_llm = ScriptedLLM(
-        [
-            {"candidates": []},
+        tier_responses=[
+            _EMPTY_CANDIDATES,
             {"candidates": [{"chunk_index": 0, "category": "LG", "quoted_text": "간단한 목적 설명입니다.", "reason": "앞뒤 모순"}]},
-            {"candidates": []},
-            {"candidates": []},
+            _EMPTY_CANDIDATES,
+            _EMPTY_CANDIDATES,
         ]
     )
     confirm_llm = ScriptedLLM(
-        [
-            {"summary": ""},
+        [{"summary": ""}],
+        tier_responses=[
+            None,
             {
                 "verdicts": [
                     {
@@ -98,7 +106,9 @@ def test_review_document_populates_related_location_for_relational_categories(ru
                     }
                 ]
             },
-        ]
+            None,
+            None,
+        ],
     )
 
     result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
@@ -112,16 +122,17 @@ def test_review_document_ignores_related_location_for_non_relational_categories(
     rulebook = parse_rulebook(rulebook_path)
 
     screen_llm = ScriptedLLM(
-        [
-            {"candidates": []},
+        tier_responses=[
+            _EMPTY_CANDIDATES,
             {"candidates": [{"chunk_index": 0, "category": "MI", "quoted_text": "x", "reason": "r"}]},
-            {"candidates": []},
-            {"candidates": []},
+            _EMPTY_CANDIDATES,
+            _EMPTY_CANDIDATES,
         ]
     )
     confirm_llm = ScriptedLLM(
-        [
-            {"summary": ""},
+        [{"summary": ""}],
+        tier_responses=[
+            None,
             {
                 "verdicts": [
                     {
@@ -136,7 +147,9 @@ def test_review_document_ignores_related_location_for_non_relational_categories(
                     }
                 ]
             },
-        ]
+            None,
+            None,
+        ],
     )
 
     result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
@@ -151,16 +164,17 @@ def test_review_document_rejects_rule_id_outside_screened_category(rulebook_path
     rulebook = parse_rulebook(rulebook_path)
 
     screen_llm = ScriptedLLM(
-        [
-            {"candidates": []},
+        tier_responses=[
+            _EMPTY_CANDIDATES,
             {"candidates": [{"chunk_index": 0, "category": "MI", "quoted_text": "x", "reason": "r"}]},
-            {"candidates": []},
-            {"candidates": []},
+            _EMPTY_CANDIDATES,
+            _EMPTY_CANDIDATES,
         ]
     )
     confirm_llm = ScriptedLLM(
-        [
-            {"summary": ""},
+        [{"summary": ""}],
+        tier_responses=[
+            None,
             {
                 "verdicts": [
                     {
@@ -174,7 +188,9 @@ def test_review_document_rejects_rule_id_outside_screened_category(rulebook_path
                     }
                 ]
             },
-        ]
+            None,
+            None,
+        ],
     )
 
     result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
@@ -184,16 +200,17 @@ def test_review_document_rejects_rule_id_outside_screened_category(rulebook_path
 def test_review_document_respects_excused_flag(rulebook_path):
     rulebook = parse_rulebook(rulebook_path)
     screen_llm = ScriptedLLM(
-        [
-            {"candidates": []},
+        tier_responses=[
+            _EMPTY_CANDIDATES,
             {"candidates": [{"chunk_index": 0, "category": "MI", "quoted_text": "x", "reason": "r"}]},
-            {"candidates": []},
-            {"candidates": []},
+            _EMPTY_CANDIDATES,
+            _EMPTY_CANDIDATES,
         ]
     )
     confirm_llm = ScriptedLLM(
-        [
-            {"summary": ""},
+        [{"summary": ""}],
+        tier_responses=[
+            None,
             {
                 "verdicts": [
                     {
@@ -208,7 +225,9 @@ def test_review_document_respects_excused_flag(rulebook_path):
                     }
                 ]
             },
-        ]
+            None,
+            None,
+        ],
     )
 
     result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
@@ -218,20 +237,26 @@ def test_review_document_respects_excused_flag(rulebook_path):
 def test_review_document_isolates_a_single_tier_failure(rulebook_path):
     rulebook = parse_rulebook(rulebook_path)
 
-    class _FailOnSecondCall:
-        def __init__(self, responses):
+    class _TierFailingLLM:
+        # Fails specifically on the Document tier's screen call. Real concurrent tier
+        # execution means "the first call made" is no longer a stable proxy for "the
+        # Document tier's call" — failure has to be keyed off tier identity via clone(),
+        # same as ScriptedLLM's tier_responses routing above.
+        def __init__(self, *, fail_tier: Level, should_fail: bool = False) -> None:
             self.model = "fake"
             self.usage = []
-            self._responses = iter(responses)
-            self._calls = 0
+            self._fail_tier = fail_tier
+            self._should_fail = should_fail
 
         def complete_json(self, *, system, prompt):
-            self._calls += 1
-            if self._calls == 1:  # Document tier's screen call fails
+            if self._should_fail:
                 raise ValueError("simulated malformed JSON response")
-            return next(self._responses)
+            return _EMPTY_CANDIDATES
 
-    screen_llm = _FailOnSecondCall([{"candidates": []}, {"candidates": []}, {"candidates": []}])
+        def clone(self, *, tier=None):
+            return _TierFailingLLM(fail_tier=self._fail_tier, should_fail=tier == self._fail_tier)
+
+    screen_llm = _TierFailingLLM(fail_tier=Level.DOCUMENT)
     confirm_llm = ScriptedLLM([{"summary": "요약"}])
 
     result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)

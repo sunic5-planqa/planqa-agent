@@ -47,6 +47,17 @@ class LLMClient(ABC):
         Callers must instruct the model (in `prompt`/`system`) to respond with JSON only.
         Implementations append one CallStats to self.usage per successful call."""
 
+    def clone(self, *, tier: object | None = None) -> "LLMClient":
+        """A fresh, independent instance with the same config — used by callers (e.g.
+        category_screen.review_document) that run several calls concurrently against what
+        was one shared client, since usage-tracking (see instrumentation.record_call) diffs
+        a call's stats off self.usage, which races if two threads mutate the same list.
+        `tier` is unused here; it exists so test doubles can route scripted responses by
+        tier identity instead of by call order, which is no longer well-defined once calls
+        happen concurrently. Real backends all take model=/temperature= and re-read
+        credentials from env when omitted, so one default implementation covers all three."""
+        return type(self)(model=self.model, temperature=self._temperature)  # type: ignore[attr-defined]
+
 
 def parse_json_response(text: str) -> Any:
     """Defensive parse for backends without a native JSON-only mode: strips ```json fences
