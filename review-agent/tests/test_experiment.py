@@ -5,6 +5,7 @@ from conftest import ScriptedLLM
 from planqa_review.experiment import (
     ExperimentConfig,
     _summary_dict,
+    combined_predictions_dict,
     run_experiment,
     summary_markdown,
     write_experiment_report,
@@ -124,6 +125,33 @@ def test_summary_records_temperature_and_rulebook_hash_for_cross_run_comparison(
     markdown = summary_markdown(experiment)
     assert "0.7" in markdown
     assert hash_rulebook(rulebook_path) in markdown
+
+
+def test_combined_predictions_dict_merges_issues_from_every_document(tmp_path, rulebook_path):
+    (tmp_path / "DOC-A_test.md").write_text(_DOC, encoding="utf-8")
+    (tmp_path / "DOC-B_test.md").write_text(_DOC, encoding="utf-8")
+    rulebook = parse_rulebook(rulebook_path)
+    config = ExperimentConfig(profile="gemini_lite", doc_ids=("DOC-A", "DOC-B"))
+    build_clients = _make_build_clients([_client_pair("수정 A"), _client_pair("수정 B")])
+
+    experiment = run_experiment(config, rulebook, rulebook_path, tmp_path, [], build_clients=build_clients)
+    predictions = combined_predictions_dict(experiment)
+
+    assert [issue["doc_id"] for issue in predictions["issues"]] == ["DOC-A", "DOC-B"]
+    assert predictions["stats"]["screen"]["call_count"] == 8
+
+
+def test_write_experiment_report_writes_a_combined_predictions_file(tmp_path, rulebook_path):
+    (tmp_path / "DOC-A_test.md").write_text(_DOC, encoding="utf-8")
+    rulebook = parse_rulebook(rulebook_path)
+    config = ExperimentConfig(profile="gemini_lite", doc_ids=("DOC-A",))
+    build_clients = _make_build_clients([_client_pair("수정 A")])
+
+    experiment = run_experiment(config, rulebook, rulebook_path, tmp_path, [], build_clients=build_clients)
+    out_dir = tmp_path / "out"
+    write_experiment_report(out_dir, experiment, rulebook)
+
+    assert (out_dir / "predictions.json").exists()
 
 
 def test_write_experiment_report_writes_per_doc_and_summary_files(tmp_path, rulebook_path):

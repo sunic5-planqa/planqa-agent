@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from planqa_review.benchmark import BENCHMARK_DOC_IDS, resolve_source_path
-from planqa_review.diff_report import write_report
+from planqa_review.diff_report import issue_dicts, write_report
 from planqa_review.llm.base import LLMClient
 from planqa_review.llm.factory import build_llm_client
 from planqa_review.models import PROFILES
@@ -231,16 +231,32 @@ def summary_markdown(experiment: ExperimentResult) -> str:
     return "\n".join(lines)
 
 
+def combined_predictions_dict(experiment: ExperimentResult) -> dict:
+    """All documents' issues merged into one `{"issues": [...], "stats": {...}}` payload —
+    eval-agent's `--predictions` flag takes one file, and a single document's golden-row
+    coverage is too sparse for recall/precision to mean anything (a model pilot needs
+    several documents scored together)."""
+    issues: list[dict] = []
+    for doc in experiment.documents:
+        issues.extend(issue_dicts(doc.result))
+    return {"issues": issues, "stats": _summary_dict(experiment.summary)}
+
+
 def write_experiment_report(output_dir: Path, experiment: ExperimentResult, rulebook: RuleBook) -> Path:
     """Writes one `review.json`/`review.md` per document (via diff_report.write_report,
     same shape a single `planqa-review review` run produces) plus a benchmark-wide
-    `summary.json`/`summary.md` at the experiment root."""
+    `summary.json`/`summary.md` and a combined `predictions.json` (all documents' issues in
+    one file, for feeding eval-agent) at the experiment root."""
     output_dir.mkdir(parents=True, exist_ok=True)
     for doc in experiment.documents:
         write_report(output_dir / doc.doc_id, doc.result, rulebook, doc.stats)
 
     summary_json_path = output_dir / "summary.json"
     summary_md_path = output_dir / "summary.md"
+    predictions_path = output_dir / "predictions.json"
     summary_json_path.write_text(json.dumps(_summary_dict(experiment.summary), ensure_ascii=False, indent=2), encoding="utf-8")
     summary_md_path.write_text(summary_markdown(experiment), encoding="utf-8")
+    predictions_path.write_text(
+        json.dumps(combined_predictions_dict(experiment), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return output_dir
