@@ -8,7 +8,12 @@ from google.genai import types
 
 from planqa_eval_service.llm.base import LLMClient, parse_json_response
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+# "gemini-2.5-flash"/"gemini-2.5-pro" are quota-exhausted (429) on this key/project — same
+# finding review-agent's docs/progress.md already recorded (2026-08-05); the "-lite" lineup
+# is what actually works. Matters more here than for review-agent: eval-service is meant to
+# keep up with review-agent's live request rate, and 2.5-flash's client-side retry-until-it-
+# works behavior (~16s/call observed) works against that.
+DEFAULT_MODEL = "gemini-flash-lite-latest"
 
 
 class GeminiClient(LLMClient):

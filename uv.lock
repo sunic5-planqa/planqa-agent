@@ -619,6 +619,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "google-genai" },
     { name = "planqa-schemas" },
+    { name = "python-dotenv" },
     { name = "uvicorn" },
 ]
 
@@ -633,6 +634,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "google-genai", specifier = ">=0.3" },
     { name = "planqa-schemas", editable = "packages/planqa-schemas" },
+    { name = "python-dotenv", specifier = ">=1.0" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
 

@@ -5,6 +5,8 @@ import os
 import time
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from planqa_eval_service.ensemble import JudgeAssembly
 from planqa_eval_service.judge import judge_review_result
 from planqa_eval_service.llm.base import LLMClient
@@ -68,6 +70,10 @@ def run_worker(
 
 
 def main() -> None:
+    # Mirrors review-agent's/eval-agent's cli.py — searches upward from CWD for a .env,
+    # so `uv run --package planqa-eval-service planqa-eval-service-worker` picks up
+    # services/eval-service/.env the same way those two packages already do.
+    load_dotenv()
     db_path = Path(os.environ.get("EVAL_SERVICE_DB_PATH", "eval_service.db"))
     rulebook_path = Path(os.environ.get("EVAL_SERVICE_RULEBOOK_PATH", str(_DEFAULT_RULEBOOK_PATH)))
     llm = build_llm_client(os.environ.get("EVAL_SERVICE_BACKEND"))
