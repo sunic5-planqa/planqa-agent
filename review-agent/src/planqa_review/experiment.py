@@ -104,6 +104,9 @@ def _summarize(documents: tuple[DocumentRun, ...], temperature: float, total_wal
     )
 
 
+ReviewFn = Callable[[str, str, RuleBook, LLMClient, LLMClient], ReviewResult]
+
+
 def run_experiment(
     config: ExperimentConfig,
     rulebook: RuleBook,
@@ -111,12 +114,24 @@ def run_experiment(
     source_dir: Path,
     golden_rows: list[GoldenRow],
     build_clients: Callable[[], tuple[LLMClient, LLMClient]] | None = None,
+    review_fn: ReviewFn | None = None,
 ) -> ExperimentResult:
-    """Sweeps `config.doc_ids` through `config.profile`, scoring each document against
+    """Sweeps `config.doc_ids` through a review structure, scoring each document against
     `golden_rows` — one fresh pair of LLM clients per document (`build_clients`, defaulting
     to the real factory) so per-document token/time stats never mix across documents. Tests
-    override `build_clients` to hand back scripted clients instead of hitting a real backend."""
-    profile = PROFILES[config.profile]
+    override `build_clients` to hand back scripted clients instead of hitting a real backend.
+
+    `review_fn` defaults to the baseline structure (제안5): `config.profile` looked up in
+    `models.PROFILES`, run through `pipeline.review_document`. Pass an explicit `review_fn`
+    (matching `pipeline.review_document`'s signature minus the profile argument) to sweep any
+    other structure through this same harness — see `structures/`. When `review_fn` is given,
+    `config.profile` is never looked up in `PROFILES`; it's just a label recorded in the
+    output (so give it a descriptive name like "proposal0")."""
+    if review_fn is None:
+        profile = PROFILES[config.profile]
+        review_fn = lambda doc_id, text, rb, screen_llm, confirm_llm: review_document(  # noqa: E731
+            doc_id, text, rb, screen_llm, confirm_llm, profile
+        )
     backend_name = config.backend or os.environ.get("PLANQA_LLM_BACKEND") or "gemini"
     build_clients = build_clients or (
         lambda: (
@@ -133,7 +148,7 @@ def run_experiment(
         screen_llm, confirm_llm = build_clients()
 
         doc_start = time.perf_counter()
-        result = review_document(doc_id, document_text, rulebook, screen_llm, confirm_llm, profile)
+        result = review_fn(doc_id, document_text, rulebook, screen_llm, confirm_llm)
         stats = build_run_stats(
             profile=config.profile,
             backend=backend_name,

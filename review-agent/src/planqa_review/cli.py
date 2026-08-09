@@ -18,6 +18,7 @@ from planqa_review.pipeline import review_document
 from planqa_review.run_stats import build_run_stats
 from planqa_review.rulebook import parse_rulebook
 from planqa_review.scoring import load_golden_rows
+from planqa_review.structures import STRUCTURES
 
 DEFAULT_RULEBOOK = Path("data/rulebook/rulebook_v1.0.md")
 
@@ -72,17 +73,23 @@ def cmd_experiment(args: argparse.Namespace) -> int:
     golden_rows = list(load_golden_rows(args.qa_dataset))
     doc_ids = tuple(args.doc_ids) if args.doc_ids else BENCHMARK_DOC_IDS
 
+    # --structure picks a non-baseline review_fn (see structures/); config.profile then
+    # becomes just a label (not a models.PROFILES lookup) — default it to the structure
+    # name so the output path/summary stay descriptive without a separate flag.
+    review_fn = STRUCTURES[args.structure] if args.structure else None
+    profile_label = args.structure or args.profile
+
     config = ExperimentConfig(
-        profile=args.profile,
+        profile=profile_label,
         backend=args.backend,
         screen_model=args.screen_model,
         verify_model=args.verify_model,
         temperature=args.temperature,
         doc_ids=doc_ids,
     )
-    experiment = run_experiment(config, rulebook, args.rulebook, args.source_dir, golden_rows)
+    experiment = run_experiment(config, rulebook, args.rulebook, args.source_dir, golden_rows, review_fn=review_fn)
 
-    out_dir = args.out or Path("outputs/experiments") / args.profile / _timestamp()
+    out_dir = args.out or Path("outputs/experiments") / profile_label / _timestamp()
     write_experiment_report(out_dir, experiment, rulebook)
 
     score = experiment.summary.score.overall
@@ -147,7 +154,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile",
         default=DEFAULT_PROFILE,
         choices=sorted(PROFILES),
-        help="프롬프트/로직 전략 (src/planqa_review/models/) — 모델 실험용",
+        help="프롬프트/로직 전략 (src/planqa_review/models/) — --structure 미지정 시(제안5 baseline) 적용",
+    )
+    experiment_parser.add_argument(
+        "--structure",
+        default=None,
+        choices=sorted(STRUCTURES),
+        help="구조 ablation용 — 지정 시 baseline(제안5) 대신 이 구조(src/planqa_review/structures/)로 실행, --profile은 무시됨",
     )
     experiment_parser.set_defaults(func=cmd_experiment)
 
