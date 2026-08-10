@@ -226,3 +226,19 @@ def test_screen_and_confirm_prompts_instruct_active_cross_location_search(rulebo
     confirm_system = confirm_llm.isolated[Level.DOCUMENT].calls[-1]["system"]
     assert "goal/KPI" in screen_system
     assert "actively search" in confirm_system
+
+
+def test_review_document_reports_a_clear_error_if_a_plain_scripted_llm_is_used(rulebook_path):
+    # A plain ScriptedLLM([...]) (no keyed_responses) used against a structure that
+    # dispatches concurrently must fail with a clear, specific message in tier_errors —
+    # never silently reintroduce the shared-iterator race keyed_responses exists to
+    # prevent. isolate_client() failures degrade into a tier_error like any other pass
+    # failure (review_document itself must not crash), so this checks the error message
+    # landed there rather than propagating as a raised exception.
+    rulebook = parse_rulebook(rulebook_path)
+    confirm_llm = ScriptedLLM([{"summary": ""}])
+    screen_llm = ScriptedLLM([_EMPTY_CANDIDATES, _EMPTY_CANDIDATES])
+
+    result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
+
+    assert any("keyed_responses" in error for error in result.tier_errors)
