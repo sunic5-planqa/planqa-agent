@@ -460,3 +460,51 @@ golden-free).
 - No behavior/business-logic change here — this was a pure structural move. Next real work
   item is still what it was before: a real multi-doc review-agent run for a non-degenerate
   recall/precision number.
+
+## 2026-08-10 — `--with-baseline` flag, quota-fixed default model, looser matcher
+
+Ran `evaluate` for real against a live `review-agent` DOC-001 output (`category_screen`,
+Claude Haiku both stages, 21 issues) for the first time this session. Found and fixed real
+problems along the way rather than just reading the numbers.
+
+### Done
+
+- **`evaluate` always ran the Review1-6 human-baseline loop unconditionally** — several times
+  the cost/time of scoring `predicted` alone, and what actually burned through every rotated
+  `GEMINI_API_KEYS` key's daily quota on the first attempt (429, `gemini-2.5-flash`, "limit:
+  20"). `run_full_evaluation` now takes `include_baseline: bool = False` and returns
+  `comparison: BaselineComparison | None`, short-circuiting before `parse_review_sheets` is
+  even called when off. `write_report`/`to_json_dict` already accepted `baseline=None`, so
+  no reporting-layer change needed. New `--with-baseline` CLI flag (opt-in) for when the
+  comparison actually is wanted. 2 new tests in `test_full_eval.py` (default skips and never
+  touches `parse_review_sheets`; `--with-baseline`-equivalent path still produces a real
+  `BaselineComparison`).
+- **`GeminiClient`'s `DEFAULT_MODEL` was the same quota-exhausted `gemini-2.5-flash`** that
+  review-agent (2026-08-05) and `services/eval-service` (this session, PR #13) already found
+  and fixed — just not propagated here yet. Switched to `gemini-flash-lite-latest`.
+- Golden-set score for that DOC-001 run: **0 matches / 1 miss / 21 fp_candidates** (the one
+  DOC-001 golden row, `LG-05` "3장 KPI vs 4장 기술 제약", is a cross-section contradiction
+  review-agent's 21 findings genuinely don't cover — not a false negative from matcher
+  strictness). All 21 unmatched findings triaged `false_positive` — but several of triage's
+  own `reasoning` strings said things like *"a valid logic gap"* / *"correctly flagged"*
+  while still picking `false_positive`, a real reasoning/verdict inconsistency in the triage
+  judge worth a closer look later (not touched this session — scoped to the matcher only
+  per instruction).
+- **Loosened `matcher.py`'s matching prompt** — it previously required "same location/span
+  AND same kind of problem" (a strict AND); now explicitly says location/span is a signal,
+  not a hard requirement, and to err toward matching on substantive overlap rather than
+  losing a real catch to a location/wording technicality. Re-ran the same DOC-001 report
+  after this change: still 0 matches — confirmed this is a genuine miss (the golden issue's
+  actual content isn't among the 21 predicted issues), not something the old prompt was
+  wrongly gatekeeping, so no false improvement was fabricated here. The change is still a
+  real, tested behavior improvement for cases where it *is* a wording/location technicality.
+- 76/76 tests green throughout (74 + 2 new).
+
+### Next
+
+- The triage reasoning/verdict inconsistency above (reasoning says "valid" but verdict says
+  `false_positive`) is a real triage-judge reliability question — consider `--judge-ensemble`
+  for triage specifically, or tightening `_TRIAGE_SYSTEM` to force the verdict to actually
+  follow from the stated reasoning, next time this comes up.
+- Still no non-degenerate multi-doc recall/precision number — DOC-001 alone has only 1
+  golden row, too sparse to say much either way about review-agent's real accuracy.
