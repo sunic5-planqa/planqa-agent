@@ -508,3 +508,61 @@ problems along the way rather than just reading the numbers.
   follow from the stated reasoning, next time this comes up.
 - Still no non-degenerate multi-doc recall/precision number — DOC-001 alone has only 1
   golden row, too sparse to say much either way about review-agent's real accuracy.
+
+## 2026-08-10 (later) — 20-doc benchmark run: golden scoping + a real triage taxonomy gap
+
+First non-degenerate multi-document run: `category_screen` (Claude Haiku both stages) across
+the full `BENCHMARK_DOC_IDS` (DOC-001–020, 20 docs, 295 issues total), scored against golden.
+Two more real fixes came out of actually looking at the numbers instead of trusting them.
+
+### Done
+
+- **Golden-set scoping**: `run_full_evaluation` now filters `golden` down to only the
+  `doc_id`s present in `predicted` (`_scope_to_predicted_docs`, falls back to the full set
+  when `predicted` is empty, since then there's no signal for which docs were intended).
+  Without this, `evaluate` scored the subject run against golden rows for every document in
+  the whole dataset, including the ~20+ never given to review-agent at all — every one of
+  those rows was an automatic false negative unrelated to anything this run actually did.
+  Baseline-comparison runs (`--with-baseline`) use the same scoped golden, so the subject
+  and each human reviewer are compared over identical document sets. 2 new tests.
+- **Real finding, not a metric bug — but led to one**: first pass on the 20-doc benchmark
+  scored recall=15.8%, **precision=1.0%** (TP=3, FN=16, FP=292). Read a random sample of 20
+  of the 292 `false_positive` triage verdicts (no LLM calls, just reading the already-
+  computed `reasoning` strings) — **all 20** described the flagged issue as correctly
+  fitting/matching an existing rule category, e.g. *"The issue points out a missing
+  intermediate logical connection... fitting Logic Gap."* — yet were still verdict
+  `false_positive`. This wasn't the earlier reasoning/verdict-inconsistency bug recurring at
+  scale; it's a **structural gap in the 3-way triage taxonomy**: `new_rule_candidate` only
+  covers "doesn't fit any existing category" (a rulebook gap), and `false_positive` only
+  covers "not a real problem" — neither one describes "correctly uses an existing rule for a
+  real problem, golden just never happened to label this specific instance" (golden-set
+  incompleteness), so the model had nowhere to put that case but `false_positive`.
+- Added a 4th verdict, **`valid_but_unlabeled`**, to `new_rule_triage.py`'s `Verdict`
+  Literal/`_TRIAGE_CRITERIA`/both system prompts, and to `aggregator.py` (excluded from
+  precision the same way `new_rule_candidate` already was, tracked as its own
+  `AggregateReport.valid_unlabeled_count`). Surfaced in `reporter.py`'s JSON/markdown
+  summary. 2 new tests (`test_aggregator.py`, `test_new_rule_triage.py`).
+- Re-scored the same 20-doc predictions after the fix (no re-run of review-agent, just
+  re-triage): **precision 1.0% → 42.9%** (FP 292 → 4, `valid_unlabeled_count`: 288). Recall
+  stayed exactly 15.8% — expected, triage only affects unmatched-candidate classification,
+  never the golden-match/miss count itself.
+- 80/80 tests green throughout (78 + 2).
+
+### Notes
+
+- This was explicitly *not* "loosen the metric until the number looks better" — the fix is
+  a real taxonomy gap that was mislabeling golden-set incompleteness as agent error, found
+  by reading actual `reasoning` text before changing anything, and it left recall (the other
+  half of the "is this metric trustworthy" question) completely untouched on purpose.
+- Session cost-conscious throughout — this whole investigation reused one review-agent run
+  (295 issues, computed once) and re-triaged the same file against Gemini flash-lite twice,
+  no repeated re-runs.
+
+### Next
+
+- Recall is still only 15.8% (3/19) and genuinely unverified — the 16 missed golden rows
+  need an actual read (available locally in `report.json`'s `misses`, no LLM calls needed)
+  to say whether they're real misses or something else systematic.
+- `new_rule_candidate_count` was 0 across all 292 candidates this run — worth checking
+  whether the taxonomy still has room for genuine rulebook gaps now that
+  `valid_but_unlabeled` exists, or whether triage now over-applies the new category.
