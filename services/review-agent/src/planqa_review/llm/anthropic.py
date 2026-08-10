@@ -30,8 +30,9 @@ def _load_api_key(explicit: str | None) -> str:
 
 
 class AnthropicClient(LLMClient):
-    # Direct Anthropic API access (not a shared gateway) — for the demo confirm stage,
-    # where the team pays for its own Claude credit.
+    """Direct Anthropic API access (not the mindlogic gateway) — for the demo confirm stage,
+    where the team is paying for its own Claude credit rather than sharing gateway quota."""
+
     def __init__(
         self,
         model: str = DEFAULT_MODEL,
@@ -46,9 +47,25 @@ class AnthropicClient(LLMClient):
         self.usage: list[CallStats] = []
         self._client = client or anthropic.Anthropic(api_key=_load_api_key(api_key))
 
-    def complete_json(self, *, system: str, prompt: str) -> Any:
+    def complete_json(self, *, system: str, prompt: str, cache_prefix: str | None = None) -> Any:
+        # `system` is always static per-caller text in this codebase (a module-level
+        # constant, never built per-call) — marking it as an ephemeral cache breakpoint is
+        # free/safe and pays off across every call this process makes, not just within one
+        # document. `cache_prefix`, when given, is the large text several concurrent
+        # per-category calls share within one document (e.g. the tier's full chunk text) —
+        # a second breakpoint so the *category-specific* suffix in `prompt` is all that's
+        # billed at full price on the 2nd+ call. Both are no-ops (silently ignored, not an
+        # error) if the combined prefix is under Anthropic's minimum cacheable length.
+        system_blocks = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        if cache_prefix:
+            content: Any = [
+                {"type": "text", "text": cache_prefix, "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": prompt},
+            ]
+        else:
+            content = prompt
         start = time.perf_counter()
-        last_error: anthropic.APIError | None = None
+        last_error: anthropic.APIError | ValueError | None = None
         for attempt in range(_MAX_ATTEMPTS):
             kwargs: dict[str, Any] = dict(
                 model=self.model,
@@ -58,8 +75,8 @@ class AnthropicClient(LLMClient):
                 # to burn the entire max_tokens budget on thinking with zero text left over
                 # (a response containing only a ThinkingBlock). Disable it explicitly.
                 thinking={"type": "disabled"},
-                system=system,
-                messages=[{"role": "user", "content": prompt}],
+                system=system_blocks,
+                messages=[{"role": "user", "content": content}],
             )
             if self.model not in _NO_TEMPERATURE_MODELS:
                 kwargs["temperature"] = self._temperature
@@ -91,7 +108,21 @@ class AnthropicClient(LLMClient):
             # claude-sonnet-5 can prepend a ThinkingBlock before the actual answer — the
             # real text isn't reliably at content[0], so scan for the first text block.
             text_block = next((block for block in response.content if block.type == "text"), None)
-            if text_block is None:
-                raise ValueError(f"no text block in Anthropic response (types: {[b.type for b in response.content]})")
-            return parse_json_response(text_block.text)
+            try:
+                if text_block is None:
+                    raise ValueError(f"no text block in Anthropic response (types: {[b.type for b in response.content]})")
+                return parse_json_response(text_block.text)
+            except ValueError as error:
+                # Seen live under concurrent load (several categories firing at once):
+                # a 200 response with an empty or truncated text block, or malformed JSON
+                # that survives `_repair_json` — the request succeeded (usage recorded
+                # above, already billed) but the content itself was bad. Retrying the exact
+                # same request has empirically fixed this (not deterministic despite
+                # temperature=0.0), unlike a genuine prompt/schema bug which would fail
+                # identically every time. json.JSONDecodeError is a ValueError subclass, so
+                # this also catches `parse_json_response`'s repair-then-reraise failure.
+                last_error = error
+                if attempt < _MAX_ATTEMPTS - 1:
+                    time.sleep(_RETRY_DELAY_SECONDS)
+                continue
         raise last_error

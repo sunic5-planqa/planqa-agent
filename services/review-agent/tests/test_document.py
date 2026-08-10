@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from planqa_review.document import parse_document
+from planqa_review.document import parse_document, resolve_reported_level
 from planqa_schemas.schema import Level
 
 _SAMPLE = """# 샘플 PRD
@@ -82,3 +82,33 @@ def test_parse_real_source_document_produces_nested_locations(source_dir):
     assert "6. 프로덕트 기능 > 6-1. 메인 배너 (캐러셀)" in paragraph_labels
 
     assert any("3초" in chunk.text for chunk in tree.sentences)
+
+
+def test_resolve_reported_level_promotes_to_a_coarser_claimed_level():
+    level, location = resolve_reported_level(Level.SENTENCE, "2. 배경 > 2-1. 문제 정의", "Logical Unit")
+    assert level == Level.LOGICAL_UNIT
+    assert location == "2. 배경"
+
+
+def test_resolve_reported_level_keeps_a_lone_label_unchanged_when_promoted():
+    level, location = resolve_reported_level(Level.PARAGRAPH, "2. 배경", "Document")
+    assert level == Level.DOCUMENT
+    assert location == "2. 배경"
+
+
+def test_resolve_reported_level_ignores_a_narrower_claim():
+    level, location = resolve_reported_level(Level.PARAGRAPH, "2. 배경 > 2-1. 문제 정의", "Sentence")
+    assert level == Level.PARAGRAPH
+    assert location == "2. 배경 > 2-1. 문제 정의"
+
+
+def test_resolve_reported_level_ignores_an_equal_claim():
+    level, location = resolve_reported_level(Level.PARAGRAPH, "2. 배경 > 2-1. 문제 정의", "Paragraph")
+    assert level == Level.PARAGRAPH
+    assert location == "2. 배경 > 2-1. 문제 정의"
+
+
+def test_resolve_reported_level_ignores_missing_or_invalid_claims():
+    assert resolve_reported_level(Level.SENTENCE, "2. 배경", None) == (Level.SENTENCE, "2. 배경")
+    assert resolve_reported_level(Level.SENTENCE, "2. 배경", "not a real level") == (Level.SENTENCE, "2. 배경")
+    assert resolve_reported_level(Level.SENTENCE, "2. 배경", 42) == (Level.SENTENCE, "2. 배경")
