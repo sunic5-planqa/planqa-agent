@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from typing import Any
 
@@ -74,7 +75,16 @@ class GeminiClient(LLMClient):
     ) -> None:
         self.model = model
         self._clients = [genai.Client(api_key=key) for key in _load_api_keys(api_keys)]
-        self._current = 0
+        # A shared mutable cell (not a plain int) plus a lock, not because this instance is
+        # itself used from multiple threads directly, but because instrumentation.
+        # isolate_client()'s shallow copy.copy() (used by structures that dispatch
+        # concurrently, e.g. bundled_screen_hybrid._run_pass) copies plain int attributes by
+        # value — each concurrent copy would silently get its own disconnected rotation
+        # index, so key-rotation progress learned by one concurrently-running pass would
+        # never reach another, or the original client. A shared list cell is what
+        # copy.copy() naturally shares by reference instead.
+        self._current = [0]
+        self._current_lock = threading.Lock()
         self._temperature = temperature
         self.usage: list[CallStats] = []
 
@@ -87,7 +97,7 @@ class GeminiClient(LLMClient):
         last_error: genai_errors.APIError | None = None
         for _cycle in range(_MAX_CYCLES):
             for _ in range(len(self._clients)):
-                client = self._clients[self._current]
+                client = self._clients[self._current[0]]
                 try:
                     response = client.models.generate_content(
                         model=self.model,
@@ -107,12 +117,14 @@ class GeminiClient(LLMClient):
                     if error.code != 429:
                         raise
                     last_error = error
-                    self._current = (self._current + 1) % len(self._clients)
+                    with self._current_lock:
+                        self._current[0] = (self._current[0] + 1) % len(self._clients)
                 except genai_errors.ServerError as error:
                     # 5xx ("model overloaded") is transient and unrelated to quota — worth
                     # retrying the same way as 429 rather than failing the whole run.
                     last_error = error
-                    self._current = (self._current + 1) % len(self._clients)
+                    with self._current_lock:
+                        self._current[0] = (self._current[0] + 1) % len(self._clients)
             # every key hit an error this cycle — back off before cycling through again
             time.sleep(_retry_delay_seconds(last_error))
         raise last_error
