@@ -44,7 +44,13 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     judge_assembly = _parse_judge_ensemble(args.judge_ensemble)
 
     result, report, comparison = run_full_evaluation(
-        args.xlsx, predicted, rulebook, args.source_dir, llm, judge_assembly=judge_assembly
+        args.xlsx,
+        predicted,
+        rulebook,
+        args.source_dir,
+        llm,
+        judge_assembly=judge_assembly,
+        include_baseline=args.with_baseline,
     )
 
     out_dir = Path("outputs/eval") / _timestamp()
@@ -70,6 +76,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="LLM-as-judge orchestration: comma-separated name:backend[:model], e.g. "
         "qwen:ollama:qwen2.5:1.5b,exaone:ollama:exaone3.5:2.4b,gemma:ollama:gemma2:2b "
         "— --backend's LLM acts as the arbiter for pairs the ensemble can't agree on",
+    )
+    eval_parser.add_argument(
+        "--with-baseline",
+        action="store_true",
+        help="also run the Review1-6 human-baseline comparison — several times the cost/"
+        "time of the default golden-set-only run, off unless explicitly asked for",
     )
     eval_parser.set_defaults(func=cmd_evaluate)
 

@@ -19,10 +19,17 @@ def run_full_evaluation(
     source_dir: Path,
     llm: LLMClient,
     judge_assembly: JudgeAssembly | None = None,
-) -> tuple[PipelineResult, AggregateReport, BaselineComparison]:
-    """Re-reads the golden dataset and Review1-6 sheets fresh — this is the point where the
-    "no hardcoded document list" constraint actually gets exercised: as more golden rows get
-    confirmed, this picks them up with no code change.
+    include_baseline: bool = False,
+) -> tuple[PipelineResult, AggregateReport, BaselineComparison | None]:
+    """Re-reads the golden dataset fresh — this is the point where the "no hardcoded
+    document list" constraint actually gets exercised: as more golden rows get confirmed,
+    this picks them up with no code change.
+
+    include_baseline defaults to False: the Review1-6 human-baseline loop re-runs the full
+    judge/matcher pipeline once per reviewer sheet against the same golden set, which is
+    several times the cost/time of just scoring `predicted` — not something a normal
+    "how good is this run" check needs, and it's what was burning through the free-tier
+    Gemini quota on every `evaluate` call. Pass include_baseline=True to get it back.
 
     judge_assembly, if given, only applies to the subject `predicted` run — not the Review1-4
     baseline loop below. Aggregator never reads judge_scores (recall/precision only), so
@@ -32,6 +39,9 @@ def run_full_evaluation(
     golden = parse_golden_dataset(xlsx_path)
     result = run_pipeline(golden, predicted, rulebook, source_dir, llm, judge_assembly=judge_assembly)
     report = aggregate(result)
+
+    if not include_baseline:
+        return result, report, None
 
     baselines: dict[str, AggregateReport] = {}
     for name, issues in parse_review_sheets(xlsx_path).items():
