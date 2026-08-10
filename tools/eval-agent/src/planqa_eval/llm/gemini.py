@@ -10,7 +10,10 @@ from google.genai import types
 
 from planqa_eval.llm.base import LLMClient, parse_json_response
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+# "gemini-2.5-flash" caps at 20 requests/day/key on the free tier and is what just burned
+# through every rotated key on an `evaluate` run (see docs/progress.md) — same finding
+# review-agent/eval-service already made and fixed. "-lite" has much more free-tier headroom.
+DEFAULT_MODEL = "gemini-flash-lite-latest"
 
 # The free tier caps out fast (as low as 5 RPM, or 20 requests/day on some models), and a
 # batch run naturally fires many calls back to back. GEMINI_API_KEYS lets several free-tier

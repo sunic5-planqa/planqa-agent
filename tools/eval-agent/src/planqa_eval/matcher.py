@@ -9,9 +9,15 @@ from planqa_schemas.schema import Issue
 _MATCHER_SYSTEM = (
     "You are matching QA issues found by a document-review agent against a human-labeled "
     "golden list of issues, for a single document and rule category. Two issues match if "
-    "they point at the same underlying problem (same location/span and same kind of "
-    "problem), even if the wording differs. Each golden issue matches at most one "
-    "predicted issue and vice versa; issues with no counterpart are simply left unmatched. "
+    "they're clearly about the same underlying problem — same location/span is a strong "
+    "signal but not a hard requirement on its own; a predicted issue at a nearby/related "
+    "location or a slightly different specific rule within the category can still match a "
+    "golden issue if it's substantively the same gap or inconsistency the golden issue is "
+    "pointing at. Err on the side of matching when in doubt, rather than leaving a real "
+    "catch unmatched over a wording/location technicality — this is scoring the agent's "
+    "usefulness, not grading a citation format. Each golden issue matches at most one "
+    "predicted issue and vice versa; issues with no real counterpart are simply left "
+    "unmatched.\n"
     'Respond with JSON only: {"matches": [{"golden_index": <int>, "predicted_index": <int>}, ...]}'
 )
 
