@@ -8,7 +8,7 @@ from planqa_eval.llm.base import LLMClient
 from planqa_schemas.rulebook import RuleBook
 from planqa_schemas.schema import Issue
 
-Verdict = Literal["false_positive", "new_rule_candidate", "human_review"]
+Verdict = Literal["false_positive", "new_rule_candidate", "valid_but_unlabeled", "human_review"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,26 +25,41 @@ _TRIAGE_CRITERIA = (
     "fit any of the existing rule categories listed below (a legitimate rulebook gap, not "
     "an agent error — the rulebook has grown from real cases like this before, e.g. LG-06 "
     "and MI-08)\n"
+    '- "valid_but_unlabeled": the agent correctly spotted a real problem AND correctly '
+    "applied an existing rule category to it — the golden (human-labeled) set simply "
+    "doesn't happen to have this specific instance labeled. This is golden-set "
+    "incompleteness, not an agent error, and is different from \"new_rule_candidate\" "
+    "(which is about the rulebook itself missing a category, not about golden coverage)\n"
     '- "human_review": you cannot confidently tell which of the above it is'
+)
+
+_VERDICT_MUST_FOLLOW_REASONING = (
+    "Write reasoning first, then pick the verdict that actually follows from it — not the "
+    "other way around. In particular: if your reasoning concludes the flagged issue "
+    "describes a real, genuine problem that correctly fits/matches one of the existing "
+    "rule categories, the verdict must be \"valid_but_unlabeled\", never \"false_positive\" "
+    "— \"false_positive\" is reserved for issues that are not real problems at all."
 )
 
 _TRIAGE_SYSTEM = (
     "A document-review agent flagged an issue that did not match any golden (human-"
     f"confirmed) issue for this document/category. Decide whether this is:\n{_TRIAGE_CRITERIA}\n"
-    'Respond with JSON only: {"verdict": "false_positive"|"new_rule_candidate"|'
-    '"human_review", "reasoning": "<one sentence>"}'
+    f"{_VERDICT_MUST_FOLLOW_REASONING}\n"
+    'Respond with JSON only: {"reasoning": "<one sentence>", "verdict": "false_positive"|'
+    '"new_rule_candidate"|"valid_but_unlabeled"|"human_review"}'
 )
 
 _BATCH_TRIAGE_SYSTEM = (
     "A document-review agent flagged several issues that did not match any golden (human-"
     f"confirmed) issue for their document/category. For EACH indexed item below, "
     f"independently decide whether it is:\n{_TRIAGE_CRITERIA}\n"
-    'Respond with JSON only: {"triage": [{"index": <int>, "verdict": "false_positive"|'
-    '"new_rule_candidate"|"human_review", "reasoning": "<one sentence>"}, ...]} — one entry '
-    "per item, in any order."
+    f"{_VERDICT_MUST_FOLLOW_REASONING}\n"
+    'Respond with JSON only: {"triage": [{"index": <int>, "reasoning": "<one sentence>", '
+    '"verdict": "false_positive"|"new_rule_candidate"|"valid_but_unlabeled"|"human_review"}, '
+    '...]} — one entry per item, in any order.'
 )
 
-_VALID_VERDICTS = ("false_positive", "new_rule_candidate", "human_review")
+_VALID_VERDICTS = ("false_positive", "new_rule_candidate", "valid_but_unlabeled", "human_review")
 
 
 def _category_lines(rulebook: RuleBook) -> str:

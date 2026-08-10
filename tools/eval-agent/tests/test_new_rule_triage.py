@@ -38,6 +38,14 @@ def test_triage_empty_list_makes_no_call(rulebook_path):
     assert llm.calls == []
 
 
+def test_triage_recognizes_valid_but_unlabeled_verdict(rulebook_path):
+    rulebook = parse_rulebook(rulebook_path)
+    candidates = [_issue()]
+    llm = ScriptedLLM([{"triage": [{"index": 0, "verdict": "valid_but_unlabeled", "reasoning": "r0"}]}])
+    [result] = triage_fp_candidates(candidates, rulebook, llm)
+    assert result.verdict == "valid_but_unlabeled"
+
+
 def test_triage_invalid_verdict_becomes_human_review(rulebook_path):
     rulebook = parse_rulebook(rulebook_path)
     candidates = [_issue()]

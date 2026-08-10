@@ -78,6 +78,19 @@ def test_new_rule_and_human_review_excluded_from_precision():
     assert report.human_review_count == 1
 
 
+def test_valid_but_unlabeled_excluded_from_precision_and_tracked_separately():
+    """A correctly-categorized finding golden just never labeled is a golden-set gap, not
+    an agent error — must not drag precision down the same way an actual false_positive
+    would (see docs/progress.md: this is what was making real catches on the 20-doc
+    benchmark look like a 1% precision agent when most were legitimate, just unlabeled)."""
+    predicted = _issue(rule_id="MI-02", issue_id="a")
+    triage = [TriageResult(predicted=predicted, verdict="valid_but_unlabeled")]
+    report = aggregate(_result(triage_results=triage))
+    assert report.overall.false_positive == 0
+    assert report.by_category.get("MI", ConfusionCounts()).false_positive == 0
+    assert report.valid_unlabeled_count == 1
+
+
 def test_false_positive_triage_counts_against_predicted_category():
     predicted = _issue(rule_id="TC-01")
     triage = [TriageResult(predicted=predicted, verdict="false_positive")]

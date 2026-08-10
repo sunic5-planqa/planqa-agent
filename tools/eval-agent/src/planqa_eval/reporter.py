@@ -73,6 +73,7 @@ def to_json_dict(
         "summary": {
             "overall": _counts_dict(report.overall),
             "new_rule_candidate_count": report.new_rule_candidate_count,
+            "valid_unlabeled_count": report.valid_unlabeled_count,
             "human_review_count": report.human_review_count,
             "excused_miss_count": report.excused_miss_count,
         },
@@ -147,6 +148,8 @@ def to_markdown(
     lines += [
         "",
         f"- New-rule candidates (excluded from precision): {report.new_rule_candidate_count}",
+        f"- Valid but unlabeled — golden-set gaps, not agent errors (excluded from "
+        f"precision): {report.valid_unlabeled_count}",
         f"- Sent to human review queue: {report.human_review_count}",
         f"- Excused misses (valid reference exception): {report.excused_miss_count}",
         "",
