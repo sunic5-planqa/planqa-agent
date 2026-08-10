@@ -98,6 +98,8 @@ def cmd_experiment(args: argparse.Namespace) -> int:
     config = ExperimentConfig(
         profile=profile_label,
         backend=args.backend,
+        screen_backend=args.screen_backend,
+        confirm_backend=args.confirm_backend,
         screen_model=args.screen_model,
         verify_model=args.verify_model,
         temperature=args.temperature,
@@ -167,7 +169,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--doc-ids", nargs="+", default=None, help="생략 시 benchmark.BENCHMARK_DOC_IDS 사용"
     )
     experiment_parser.add_argument("--out", type=Path, default=None, help="생략 시 outputs/experiments/<profile>/<timestamp>/")
-    experiment_parser.add_argument("--backend", default=None, help="overrides PLANQA_LLM_BACKEND (gemini|ollama)")
+    experiment_parser.add_argument(
+        "--backend", default=None, help="overrides PLANQA_LLM_BACKEND (gemini|ollama|gateway|anthropic) — both roles unless overridden below"
+    )
+    experiment_parser.add_argument("--screen-backend", default=None, help="스크리닝 전용 백엔드 — 생략 시 --backend 사용")
+    experiment_parser.add_argument("--confirm-backend", default=None, help="정밀판정 전용 백엔드 — 생략 시 --backend 사용")
     experiment_parser.add_argument("--screen-model", default=None, help="1단계 스크리닝용 모델(저비용)")
     experiment_parser.add_argument("--verify-model", default=None, help="2단계 정밀판정/컨텍스트 추출용 모델(고비용)")
     experiment_parser.add_argument(

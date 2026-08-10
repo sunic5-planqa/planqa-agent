@@ -22,6 +22,8 @@ from planqa_review.scoring import GoldenRow, ScoreCounts, ScoreResult, merge_sco
 class ExperimentConfig:
     profile: str
     backend: str | None = None
+    screen_backend: str | None = None
+    confirm_backend: str | None = None
     screen_model: str | None = None
     verify_model: str | None = None
     temperature: float = 0.0
@@ -132,11 +134,22 @@ def run_experiment(
         review_fn = lambda doc_id, text, rb, screen_llm, confirm_llm: review_document(  # noqa: E731
             doc_id, text, rb, screen_llm, confirm_llm, profile
         )
-    backend_name = config.backend or os.environ.get("PLANQA_LLM_BACKEND") or "gemini"
+    # --screen-backend/--confirm-backend override --backend per role (mirrors `review`'s
+    # --screen-backend/--confirm-backend) — needed for structures with a genuine screen role
+    # (e.g. cell3) where screen and confirm are meant to run different backends/models.
+    screen_backend = config.screen_backend or config.backend
+    confirm_backend = config.confirm_backend or config.backend
+    resolved_screen_backend = screen_backend or os.environ.get("PLANQA_LLM_BACKEND") or "gemini"
+    resolved_confirm_backend = confirm_backend or os.environ.get("PLANQA_LLM_BACKEND") or "gemini"
+    backend_name = (
+        resolved_screen_backend
+        if resolved_screen_backend == resolved_confirm_backend
+        else f"{resolved_screen_backend}+{resolved_confirm_backend}"
+    )
     build_clients = build_clients or (
         lambda: (
-            build_llm_client(config.backend, config.screen_model, config.temperature),
-            build_llm_client(config.backend, config.verify_model, config.temperature),
+            build_llm_client(screen_backend, config.screen_model, config.temperature),
+            build_llm_client(confirm_backend, config.verify_model, config.temperature),
         )
     )
 
