@@ -825,3 +825,36 @@ pass를 순차 실행하고 있던 걸 발견(category_screen.py 삭제로 지�
 - 여전히 category_screen 때와 마찬가지로, 확장 가능한 concurrency 인프라(isolate_client
   + key)는 이제 review-agent 공통 자산 — 다음에 pass/tier가 3개 이상인 구조가 나오면
   바로 재사용 가능.
+
+## 2026-08-10 (마무리) — main 승격 전 코드 리뷰, 진짜 버그 2건 + 강화 2건
+
+dev→main 승격 전 요청받은 코드 리뷰. 5건 중 4건 조치(GIL 관련 1건은 현재 배포 환경에서
+실제 위험 없어 문서화만).
+
+### Done
+
+- **진짜 버그**: `GeminiClient._current`(다중 키 라운드로빈 인덱스)가 평범한 int라
+  `isolate_client`의 `copy.copy()`가 값으로 복사 — 동시 실행되는 두 pass가 각자 독립된
+  라운드로빈 인덱스를 갖게 돼서, 한쪽 pass가 429로 배운 "이 키는 방금 막힘" 정보가
+  다른 pass나 원본 client에 전혀 전달 안 됨(`merge_usage`는 `.usage`만 병합, 이 상태는
+  안 건드림). `_current`를 공유 mutable cell(`[0]`)+`threading.Lock`으로 변경 —
+  `copy.copy()`가 자연스럽게 레퍼런스를 공유하므로 모든 isolated 복사본과 원본이 진짜로
+  같은 라운드로빈 상태를 본다. 직접 실행으로 공유 확인(`isolate_client`로 만든 두 복사본이
+  같은 `_current` 객체 식별성 공유, 한쪽에서 회전하면 원본·다른 복사본에도 즉시 반영).
+  신규 `test_llm_gemini.py`(이 백엔드 첫 테스트 파일) 2개로 회귀 고정.
+- **진짜 버그**: `bundled_screen_hybrid._run_pass`에서 `isolate_client()` 호출이
+  `try` 블록 **밖**에 있어서, 실패 시 `review_document()` 전체가 크래시(그 pass만
+  tier_error로 격리되는 게 아니라). `isolate_client()` 호출을 `try` 안으로 이동,
+  `finally`에서 `isolated_screen`/`isolated_confirm`이 `None`이 아닐 때만 `merge_usage`.
+- **강화**: `ScriptedLLM.isolate()`가 `keyed_responses` 없이 key만 받으면 조용히 `self`를
+  반환해서 concurrent race를 재도입할 위험 — `ValueError`로 명확히 실패하도록 변경.
+  신규 테스트로 `result.tier_errors`에 메시지가 잡히는지 확인(isolate_client 실패도
+  다른 pass 실패와 동일하게 tier_error로 격리되므로, 예외가 밖으로 안 나가는 게 맞는
+  동작 — 테스트도 그에 맞춰 작성).
+- **강화(경미)**: active pass가 1개뿐일 때 `ThreadPoolExecutor` 생성 자체를 스킵하고
+  `_run_pass`를 직접 호출 — 병렬화할 게 없을 때 스레드풀 오버헤드 제거.
+- GIL 원자성 가정(`merge_usage`)은 pre-existing이고 표준 CPython 배포 환경에선 실제
+  위험 없어서 손 안 댐 — free-threaded 빌드 전환 시에만 재검토 필요.
+- 123/123 review-agent 테스트 통과(120 + 3 신규), `test_bundled_screen_hybrid.py`/
+  `test_llm_gemini.py` 10회 반복으로 flaky 여부 확인. eval-agent 84, eval-service 19
+  영향 없음 — 총 226/226.
