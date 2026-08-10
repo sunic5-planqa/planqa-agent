@@ -898,3 +898,30 @@ sunnic-backend 알파테스트 실사용 피드백(이슈 #26, 사용자 본인�
 - 더 근본적인 대안(카테고리별 "한줄정의"를 `RuleDef`에 파싱해서 넣기)은 `packages/
   planqa-schemas`(eval-agent와 공유)까지 건드리는 더 큰 변경이라 이번엔 보류 — 이번
   프롬프트 보강으로도 부족하면 다음 후보.
+
+## 2026-08-11 (계속) — related_original_text 필드 추가 (이슈 #29)
+
+sunnic 알파테스트 피드백: 관계형 카테고리(LG/LF/GA)의 두 번째 위치(`related_location`)가
+라벨 문자열뿐이라 프론트에서 그 위치 문구를 편집 제안할 수 없다는 요청. 이슈 #26 코멘트의
+비용 분류로는 "중간"(순수 프롬프트도 시그니처 변경도 아닌, 필드 하나 추가) 케이스.
+
+### Done
+
+- `packages/planqa-schemas`(eval-agent와 공유)의 `Issue`에 `related_original_text: str |
+  None = None` 추가 — `related_location`과 같은 자리·같은 조건(LG/LF/GA일 때만 채워짐).
+  `slots=True` frozen dataclass에 기본값 있는 필드 추가라 순수 additive, planqa-schemas
+  8/8·eval-agent 84/84 그대로 통과(eval-agent는애초에 `related_location`도 안 읽음 —
+  review-agent 전용 프레젠테이션 필드).
+- `_CONFIRM_HYBRID_SYSTEM`: related_location을 요청하는 자리에 "그리고 original_text와
+  같은 방식으로 그 위치의 정확한 인용문도(`related_original_text`) 함께 달라"는 지시 추가,
+  JSON 스키마에도 필드 추가.
+- `_confirm_pass`: `related_location`과 같은 조건문 안에서 `related_original_text`도 같이
+  파싱해서 `Issue` 생성자에 전달.
+- `diff_report.py`: `issue_dicts`(JSON 출력)와 마크다운 렌더링(`- 관련 위치 원문: ...`)
+  양쪽에 반영 — review.json에 실제로 노출되도록.
+- 신규 테스트 2개: 관계형 카테고리에서 실제로 채워지는지, 비관계형 카테고리(MI)에서는
+  모델이 채우려 해도 무시되고 둘 다 None인지(defensive, 기존 related_location 테스트
+  패턴 그대로 확장).
+- 라이브 검증(DOC-001, Haiku 양쪽): LG-05/LF-04 두 건에서 `related_original_text`가
+  실제로 채워지는 것 확인 (예: "P2 | GA 스크립트 삽입 및 이벤트 트래킹 설정 | 개발+기획").
+- 227/227 테스트 통과(review-agent 124 + eval-agent 84 + eval-service 19).
