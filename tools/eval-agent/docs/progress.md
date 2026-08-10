@@ -618,3 +618,49 @@ of guessing.
 - Consider whether `--judge-ensemble`-verified triage would meaningfully change
   `valid_unlabeled_count`/`new_rule_candidate_count` now that the 4-way taxonomy exists, if
   a low-stakes moment to spend the extra API calls comes up.
+
+## 2026-08-10 (final) — near_miss_candidates: surface, don't auto-credit, ambiguous misses
+
+User asked to loosen further ("더 설계해서 완화해봐"). Checked by hand (no LLM calls) whether
+any of the 12 genuine misses had a same-category unmatched predicted issue nearby the
+matcher might have missed — result was mixed, which shaped the design.
+
+### Done
+
+- **Evidence first**: cross-referenced all 12 misses against the 295-issue predictions file
+  locally. Found real near-misses (DOC-003: same rule_id AE-03, same "적절히" vagueness,
+  just table-row vs. whole-section granularity) *and* real non-matches at the exact same
+  location (DOC-015: golden MI-05 wants "품절 후기 예외 처리 미정의", the same-location
+  predicted MI-02 is actually about "노출 처리 단위 불명확" — a genuinely different problem).
+  Loosening the matcher further would have fixed DOC-003 but silently fabricated a wrong
+  match for DOC-015 — decided against it.
+- Instead added `near_miss_candidates` to each miss entry in `reporter.py`'s per-document
+  breakdown (JSON and markdown): for a golden miss, any unmatched predicted issue in the
+  same document + same rule category (deterministic, `category_of`, no LLM call) is listed
+  alongside it — visible, not silently matched, **not counted toward recall**. New
+  `summary.near_miss_count` (JSON) / summary line (markdown). Purely additive — no existing
+  field or counting rule touched. 2 new tests (`test_reporter.py`).
+- Re-ran against the same 20-doc predictions (still no re-run of review-agent, still no new
+  API calls needed for this specific check): **8 of the 12 misses** now show at least one
+  near-miss candidate (DOC-003, DOC-006, DOC-001, DOC-012, DOC-016, DOC-015, DOC-018,
+  DOC-017) — recall stayed exactly 15.8%, confirming nothing was silently counted.
+- 84/84 tests green (82 + 2).
+
+### Notes
+
+- This is the fourth round this session of the same discipline: look at real reasoning/data
+  before changing a number, prefer "surface the ambiguity" over "auto-resolve it in the
+  agent's favor" whenever the evidence is mixed (as it was here, unlike `valid_but_unlabeled`
+  where the evidence was one-sided — 20/20 sampled reasonings agreed).
+- `near_miss_candidates` is a reporting aid for a human (or a follow-up LLM judge call) to
+  triage, not a scoring mechanism — deliberately no verdict/confidence attached yet.
+
+### Next
+
+- The 8 near-miss candidates are still unresolved — an actual LLM judgment (one call per
+  candidate, similar shape to the existing FP triage) could turn some into real matches and
+  leave others as confirmed non-matches, the same way `new_rule_triage.py` already does for
+  the FP side. Not done this session (cost-conscious; this was kept to zero additional API
+  calls end to end).
+- Still open from earlier: Document-tier relational-detection weak spot (review-agent's own
+  lead) and whether `--judge-ensemble` on triage changes the taxonomy counts.
