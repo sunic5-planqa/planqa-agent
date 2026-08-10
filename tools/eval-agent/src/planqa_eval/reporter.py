@@ -7,6 +7,8 @@ from typing import Any
 
 from planqa_eval.aggregator import AggregateReport, BaselineComparison, ConfusionCounts
 from planqa_eval.pipeline import PipelineResult
+from planqa_eval.prefilter import category_of
+from planqa_schemas.schema import Issue
 
 
 def _counts_dict(counts: ConfusionCounts) -> dict[str, Any]:
@@ -38,18 +40,13 @@ def _documents(result: PipelineResult) -> dict[str, dict[str, list[dict[str, Any
             }
         )
 
-    for miss in result.verified_misses:
-        documents[miss.golden.doc_id]["misses"].append(
-            {
-                "location": miss.golden.location,
-                "rule_id": miss.golden.rule_id,
-                "level": miss.golden.level,
-                "excused": miss.excused,
-                "excuse_reason": miss.excuse_reason,
-            }
-        )
-
+    # Built before the misses loop below — near_miss_candidates needs to look up unmatched
+    # predicted issues by (doc, category) while walking the misses.
+    unmatched_by_doc_category: dict[tuple[str, str], list[Issue]] = defaultdict(list)
     for triage in result.triage_results:
+        unmatched_by_doc_category[(triage.predicted.doc_id, category_of(triage.predicted.rule_id))].append(
+            triage.predicted
+        )
         documents[triage.predicted.doc_id]["fp_candidates"].append(
             {
                 "location": triage.predicted.location,
@@ -60,7 +57,31 @@ def _documents(result: PipelineResult) -> dict[str, dict[str, list[dict[str, Any
             }
         )
 
+    for miss in result.verified_misses:
+        # Deterministic (doc + rule category), no LLM call — an unmatched predicted issue
+        # in the same category doesn't necessarily mean it's the same problem (a same-
+        # location, different-substance pair has been observed for real — see
+        # docs/progress.md), so this is surfaced for review, never auto-counted toward
+        # recall the way an actual match would be.
+        near_miss = unmatched_by_doc_category.get((miss.golden.doc_id, category_of(miss.golden.rule_id)), [])
+        documents[miss.golden.doc_id]["misses"].append(
+            {
+                "location": miss.golden.location,
+                "rule_id": miss.golden.rule_id,
+                "level": miss.golden.level,
+                "excused": miss.excused,
+                "excuse_reason": miss.excuse_reason,
+                "near_miss_candidates": [
+                    {"rule_id": p.rule_id, "level": p.level, "location": p.location} for p in near_miss
+                ],
+            }
+        )
+
     return dict(documents)
+
+
+def _near_miss_count(documents: dict[str, dict[str, list[dict[str, Any]]]]) -> int:
+    return sum(1 for doc in documents.values() for miss in doc["misses"] if miss["near_miss_candidates"])
 
 
 def to_json_dict(
@@ -69,6 +90,7 @@ def to_json_dict(
     baseline: BaselineComparison | None = None,
     review_stats: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    documents = _documents(result)
     return {
         "summary": {
             "overall": _counts_dict(report.overall),
@@ -78,6 +100,7 @@ def to_json_dict(
             "valid_unlabeled_count": report.valid_unlabeled_count,
             "human_review_count": report.human_review_count,
             "excused_miss_count": report.excused_miss_count,
+            "near_miss_count": _near_miss_count(documents),
         },
         "by_category": {cat: _counts_dict(c) for cat, c in sorted(report.by_category.items())},
         "by_level": {level: _counts_dict(c) for level, c in sorted(report.by_level.items())},
@@ -95,7 +118,7 @@ def to_json_dict(
             else None
         ),
         "review_agent_stats": review_stats,
-        "documents": _documents(result),
+        "documents": documents,
     }
 
 
@@ -143,6 +166,7 @@ def to_markdown(
     baseline: BaselineComparison | None = None,
     review_stats: dict[str, Any] | None = None,
 ) -> str:
+    documents = _documents(result)
     lines = ["# PlanQA Evaluation Report", ""]
 
     lines += ["## Summary", "", "| | TP | FN | FP | Recall | Precision |", "|---|---|---|---|---|---|"]
@@ -157,6 +181,8 @@ def to_markdown(
         f"precision): {report.valid_unlabeled_count}",
         f"- Sent to human review queue: {report.human_review_count}",
         f"- Excused misses (valid reference exception): {report.excused_miss_count}",
+        f"- Misses with a same-category unmatched candidate nearby (not counted toward "
+        f"recall — needs a look, not auto-credited): {_near_miss_count(documents)}",
         "",
     ]
     lines += _review_stats_section(review_stats)
@@ -187,7 +213,7 @@ def to_markdown(
         ]
 
     lines += ["## Per-Document Detail", ""]
-    for doc_id, buckets in sorted(_documents(result).items()):
+    for doc_id, buckets in sorted(documents.items()):
         lines.append(f"### {doc_id}")
         for match in buckets["matches"]:
             status = "✅" if match["rule_id_match"] and match["level_match"] else "⚠️"
@@ -198,7 +224,14 @@ def to_markdown(
             )
         for miss in buckets["misses"]:
             tag = "excused" if miss["excused"] else "FN"
-            lines.append(f"- ❌ [{tag}] `{miss['location']}` {miss['rule_id']}/{miss['level']}")
+            near_miss = miss["near_miss_candidates"]
+            suffix = (
+                f" — 🔍 near-miss candidate(s): "
+                + ", ".join(f"{c['rule_id']}/{c['level']} `{c['location']}`" for c in near_miss)
+                if near_miss
+                else ""
+            )
+            lines.append(f"- ❌ [{tag}] `{miss['location']}` {miss['rule_id']}/{miss['level']}{suffix}")
         for fp in buckets["fp_candidates"]:
             lines.append(f"- ❓ [{fp['verdict']}] `{fp['location']}` {fp['rule_id']}/{fp['level']}")
         lines.append("")
