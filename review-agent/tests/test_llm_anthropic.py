@@ -161,6 +161,39 @@ def test_complete_json_reraises_non_retryable_error_immediately():
     assert len(fake.messages.calls) == 1
 
 
+def test_complete_json_retries_on_empty_text_block_then_succeeds(monkeypatch):
+    """Seen live under concurrent category dispatch: a 200 response whose text block is
+    empty or otherwise fails `parse_json_response` even after its repair fallback. The
+    request still succeeded and was billed, so retrying is the only way to not silently
+    drop that category's results — see the comment in anthropic.py's complete_json."""
+    monkeypatch.setattr("planqa_review.llm.anthropic.time.sleep", lambda _seconds: None)
+    calls = {"count": 0}
+
+    def handler(kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return _message("")
+        return _message('{"summary": "요약"}')
+
+    llm, _ = _client_with_handler(handler)
+    result = llm.complete_json(system="s", prompt="p")
+
+    assert result == {"summary": "요약"}
+    assert calls["count"] == 2
+    assert len(llm.usage) == 2  # both attempts were real, billed API calls
+
+
+def test_complete_json_raises_after_exhausting_retries_on_persistent_empty_response(monkeypatch):
+    monkeypatch.setattr("planqa_review.llm.anthropic.time.sleep", lambda _seconds: None)
+
+    def handler(kwargs):
+        return _message("")
+
+    llm, _ = _client_with_handler(handler)
+    with pytest.raises(ValueError):
+        llm.complete_json(system="s", prompt="p")
+
+
 def test_temperature_is_sent_for_models_that_accept_it():
     fake = _FakeAnthropic(lambda kwargs: _message('{"summary": "요약"}'))
     llm = AnthropicClient(model="claude-3-5-haiku-20241022", api_key="fake-key", temperature=0.7, client=fake)

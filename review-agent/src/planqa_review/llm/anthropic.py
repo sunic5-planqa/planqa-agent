@@ -65,7 +65,7 @@ class AnthropicClient(LLMClient):
         else:
             content = prompt
         start = time.perf_counter()
-        last_error: anthropic.APIError | None = None
+        last_error: anthropic.APIError | ValueError | None = None
         for attempt in range(_MAX_ATTEMPTS):
             kwargs: dict[str, Any] = dict(
                 model=self.model,
@@ -108,7 +108,21 @@ class AnthropicClient(LLMClient):
             # claude-sonnet-5 can prepend a ThinkingBlock before the actual answer — the
             # real text isn't reliably at content[0], so scan for the first text block.
             text_block = next((block for block in response.content if block.type == "text"), None)
-            if text_block is None:
-                raise ValueError(f"no text block in Anthropic response (types: {[b.type for b in response.content]})")
-            return parse_json_response(text_block.text)
+            try:
+                if text_block is None:
+                    raise ValueError(f"no text block in Anthropic response (types: {[b.type for b in response.content]})")
+                return parse_json_response(text_block.text)
+            except ValueError as error:
+                # Seen live under concurrent load (several categories firing at once):
+                # a 200 response with an empty or truncated text block, or malformed JSON
+                # that survives `_repair_json` — the request succeeded (usage recorded
+                # above, already billed) but the content itself was bad. Retrying the exact
+                # same request has empirically fixed this (not deterministic despite
+                # temperature=0.0), unlike a genuine prompt/schema bug which would fail
+                # identically every time. json.JSONDecodeError is a ValueError subclass, so
+                # this also catches `parse_json_response`'s repair-then-reraise failure.
+                last_error = error
+                if attempt < _MAX_ATTEMPTS - 1:
+                    time.sleep(_RETRY_DELAY_SECONDS)
+                continue
         raise last_error
