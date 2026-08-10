@@ -1,0 +1,74 @@
+[
+  {
+    "issue_id": "REV-DOC-001-000",
+    "doc_id": "DOC-001",
+    "level": "Sentence",
+    "rule_id": "AE-03",
+    "location": "1. 프로덕트 목적 > a. 문제 정의",
+    "description": "'가능한 범위 내에서', '유리한 구조'라는 표현은 구체적인 기준이나 정량적 목표가 없어 모호합니다.",
+    "exception_ref": null,
+    "original_text": "현재 카페24 기반 템플릿을 사용하고 있어 원하는 형태의 홈 화면 구성에 제약이 있으나, 가능한 범위 내에서 전환율에 유리한 구조를 설계한다.",
+    "rationale": "판단 기준이 명시되지 않아 검토자가 구체적으로 어떤 구조를 의미하는지 객관적으로 파악하기 어렵습니다.",
+    "fix_direction": "카페24 템플릿 제약 내에서 메인 배너와 카테고리 퀵링크를 상단에 배치하는 등 전환율을 높일 수 있는 구체적인 구조를 설계하는 방향으로 수정하는 것을 제안합니다."
+  },
+  {
+    "issue_id": "REV-DOC-001-001",
+    "doc_id": "DOC-001",
+    "level": "Sentence",
+    "rule_id": "AE-03",
+    "location": "2. 경쟁 분석",
+    "description": "'발란의 톤', '번개장터의 탐색 편의성'을 어떤 방식으로 벤치마킹할지에 대한 구체적 기준이나 항목이 없습니다.",
+    "exception_ref": null,
+    "original_text": "NxEF는 고가 중고 상품 특성상 브랜드 신뢰감이 중요하므로, 발란의 톤을 참고하되 번개장터의 탐색 편의성을 결합하는 방향으로 설계한다.",
+    "rationale": "추상적인 브랜드 레퍼런스 언급만으로는 실제로 어떤 UI/UX 요소를 반영할지 판단하기 어렵습니다.",
+    "fix_direction": "발란의 고급스러운 비주얼 스타일과 번개장터의 카테고리 필터링 구조 등 구체적으로 참고할 요소를 명시하여 작성하는 것을 제안합니다."
+  },
+  {
+    "issue_id": "REV-DOC-001-002",
+    "doc_id": "DOC-001",
+    "level": "Sentence",
+    "rule_id": "AE-03",
+    "location": "4. 기술적 제약 사항",
+    "description": "'별도 스크립트 삽입 검토 필요'라는 표현은 누가, 언제까지 어떤 기준으로 검토해야 하는지 구체적이지 않습니다.",
+    "exception_ref": null,
+    "original_text": "- **GA(Google Analytics) 직접 연동이 카페24 무료 플랜에서 불가**하여 별도 스크립트 삽입 검토 필요",
+    "rationale": "실행 주체와 기준이 빠져 있어 액션 아이템으로서 명확성이 떨어집니다.",
+    "fix_direction": null
+  },
+  {
+    "issue_id": "REV-DOC-001-003",
+    "doc_id": "DOC-001",
+    "level": "Sentence",
+    "rule_id": "AE-03",
+    "location": "5. 고려되는 대안",
+    "description": "'우선 작업 후'라는 표현이 구체적인 일정이나 단계별 기준 없이 모호하게 기술되어 있습니다.",
+    "exception_ref": null,
+    "original_text": "- 모바일 최적화를 위해 PC보다 모바일 화면 우선 작업 후 PC 화면 대응",
+    "rationale": "작업 순서에 대한 명확한 기준이나 마일스톤 연계성이 부족합니다.",
+    "fix_direction": "스프린트 1단계에서 모바일 웹 화면을 먼저 개발하고, 이후 PC 화면 대응 작업을 진행하는 것으로 구체화하는 것을 제안합니다."
+  },
+  {
+    "issue_id": "REV-DOC-001-004",
+    "doc_id": "DOC-001",
+    "level": "Logical Unit",
+    "rule_id": "AE-03",
+    "location": "3. 프로덕트 성공 지표와 비즈니스 목표",
+    "description": "산출 근거가 생략되어 있어 판단 기준이나 배경을 알기 어렵습니다.",
+    "exception_ref": null,
+    "original_text": "신규 방문자 대비 회원가입 전환율 3% 이상",
+    "rationale": "AE-03 규칙에 따라 구체적인 산출 근거 등 판단 기준을 함께 명시해야 합니다.",
+    "fix_direction": "예: '신규 방문자 대비 회원가입 전환율 3% 이상 (근거: 유입 대비 객단가 및 구매 전환율 분석 결과 반영)'과 같이 산출 근거를 추가하는 방식을 고려해 보세요."
+  },
+  {
+    "issue_id": "REV-DOC-001-005",
+    "doc_id": "DOC-001",
+    "level": "Document",
+    "rule_id": "TC-02",
+    "location": "NxEF 모바일 웹 — 홈 화면 PRD",
+    "description": "약어(PDP)가 본문에서 최초 등장할 때 정의 없이 사용됨",
+    "exception_ref": null,
+    "original_text": "PDP",
+    "rationale": "약어는 최초 등장 시 정의해야 한다는 규칙에 따라, '상품 상세 페이지(PDP)'와 같이 최초 등장 시 풀어 써주어야 합니다.",
+    "fix_direction": "최초 등장 위치에 '상품 상세 페이지(PDP)'와 같이 정의를 추가해 보세요."
+  }
+]

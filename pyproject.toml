@@ -1,0 +1,24 @@
+[project]
+name = "planqa-agent"
+version = "0.1.0"
+description = "planqa-agent monorepo — services/ (deployed): review-agent, eval-service. tools/ (CI-only): eval-agent. packages/: shared schemas."
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["services/*", "tools/*", "packages/*"]
+
+[tool.uv.sources]
+planqa-schemas = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"

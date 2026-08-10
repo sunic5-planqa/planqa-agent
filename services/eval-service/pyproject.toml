@@ -1,0 +1,29 @@
+[project]
+name = "planqa-eval-service"
+version = "0.1.0"
+description = "Async, reference-free grading of review-agent's live output — decoupled from review-agent's response path via a fire-and-forget SQLite outbox + polling worker"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "google-genai>=0.3",
+    "python-dotenv>=1.0",
+    "planqa-schemas",
+]
+
+[project.scripts]
+planqa-eval-service-worker = "planqa_eval_service.worker:main"
+
+[tool.uv.sources]
+planqa-schemas = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"

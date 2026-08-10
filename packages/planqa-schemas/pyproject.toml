@@ -1,0 +1,16 @@
+[project]
+name = "planqa-schemas"
+version = "0.1.0"
+description = "Shared Issue/RuleBook models — previously duplicated verbatim between review-agent and eval-agent"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
