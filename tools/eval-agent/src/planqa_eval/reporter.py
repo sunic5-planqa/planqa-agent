@@ -72,6 +72,8 @@ def to_json_dict(
     return {
         "summary": {
             "overall": _counts_dict(report.overall),
+            "overall_relaxed": _counts_dict(report.overall_relaxed),
+            "tier_accuracy": report.tier_accuracy,
             "new_rule_candidate_count": report.new_rule_candidate_count,
             "valid_unlabeled_count": report.valid_unlabeled_count,
             "human_review_count": report.human_review_count,
@@ -144,9 +146,12 @@ def to_markdown(
     lines = ["# PlanQA Evaluation Report", ""]
 
     lines += ["## Summary", "", "| | TP | FN | FP | Recall | Precision |", "|---|---|---|---|---|---|"]
-    lines.append(_counts_table_row("Overall", report.overall))
+    lines.append(_counts_table_row("Overall (strict — rule_id + level)", report.overall))
+    lines.append(_counts_table_row("Overall (relaxed — rule_id only)", report.overall_relaxed))
     lines += [
         "",
+        f"- Tier accuracy (of rule_id matches, share that also got the right level): "
+        f"{_pct(report.tier_accuracy)}",
         f"- New-rule candidates (excluded from precision): {report.new_rule_candidate_count}",
         f"- Valid but unlabeled — golden-set gaps, not agent errors (excluded from "
         f"precision): {report.valid_unlabeled_count}",
