@@ -244,9 +244,14 @@ def _run_pass(
     # screen_llm.usage/confirm_llm.usage on the *original* objects directly) still sees
     # every call.
     events: list[CallEvent] = []
-    isolated_screen = isolate_client(screen_llm, key=level)
-    isolated_confirm = isolate_client(confirm_llm, key=level)
+    # Isolation itself happens inside the try (not before it) — if isolate_client() ever
+    # raises, this pass must still degrade into a tier_error like every other failure mode
+    # here, not crash review_document() entirely.
+    isolated_screen: LLMClient | None = None
+    isolated_confirm: LLMClient | None = None
     try:
+        isolated_screen = isolate_client(screen_llm, key=level)
+        isolated_confirm = isolate_client(confirm_llm, key=level)
         candidates = record_call(
             isolated_screen,
             stage="screen",
@@ -281,8 +286,10 @@ def _run_pass(
     except Exception as error:  # noqa: BLE001 - one pass's failure shouldn't sink the whole review
         return [], events, f"{level.value} 패스 검토 실패: {error}"
     finally:
-        merge_usage(screen_llm, isolated_screen)
-        merge_usage(confirm_llm, isolated_confirm)
+        if isolated_screen is not None:
+            merge_usage(screen_llm, isolated_screen)
+        if isolated_confirm is not None:
+            merge_usage(confirm_llm, isolated_confirm)
 
 
 def review_document(
@@ -320,8 +327,20 @@ def review_document(
 
     # Paragraph and Document passes only depend on the already-computed global_context, not
     # on each other, so they run concurrently instead of sequentially doubling the wall
-    # time. See _run_pass for why each pass needs its own isolated client copy.
-    if active_passes:
+    # time. See _run_pass for why each pass needs its own isolated client copy. When only
+    # one pass is actually active (the other tier's rules/chunks were empty), there's
+    # nothing to run concurrently with, so call it directly — no point paying thread-pool
+    # setup/teardown for a single sequential call.
+    if len(active_passes) == 1:
+        level, rules, chunks = active_passes[0]
+        issues, pass_events, error = _run_pass(
+            level, rules, chunks, doc_id, global_context, document_text, rulebook, screen_llm, confirm_llm
+        )
+        all_issues.extend(issues)
+        events.extend(pass_events)
+        if error:
+            tier_errors.append(error)
+    elif active_passes:
         with ThreadPoolExecutor(max_workers=len(active_passes)) as pool:
             futures = {
                 level: pool.submit(

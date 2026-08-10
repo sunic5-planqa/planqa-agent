@@ -52,11 +52,22 @@ class ScriptedLLM(LLMClient):
         return next(self._responses)
 
     def isolate(self, key: Any | None) -> "ScriptedLLM":
-        # Callers that don't route by keyed_responses (i.e. every test not exercising a
-        # concurrent-branch structure) get the same instance back, matching the plain
-        # shared-client behavior those tests were already written against.
-        if self._keyed_responses is None or key is None:
+        # A caller with no key at all (isolate_client(llm) with no key= argument — no
+        # concurrent-branch structure needs one) gets the same instance back, matching the
+        # plain shared-client behavior non-concurrent tests were already written against.
+        if key is None:
             return self
+        # But a real key with no keyed_responses set up is almost certainly a test
+        # constructed with the plain ScriptedLLM([...]) shape for a structure that actually
+        # dispatches concurrently — silently falling back to `self` here would reintroduce
+        # the exact shared-iterator race keyed_responses exists to prevent, just later and
+        # more confusingly (intermittent misrouted responses instead of a clear error now).
+        if self._keyed_responses is None:
+            raise ValueError(
+                "ScriptedLLM.isolate() got a key but this instance has no keyed_responses — "
+                "construct it with ScriptedLLM(keyed_responses={...}) instead of a plain "
+                "response list when testing a structure that dispatches concurrently."
+            )
         child = ScriptedLLM(list(self._keyed_responses.get(key, [])))
         self.isolated[key] = child
         return child
