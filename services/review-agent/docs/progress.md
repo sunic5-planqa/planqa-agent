@@ -745,3 +745,49 @@ Haiku 스크리닝/Sonnet 정밀판정으로 라이브 검증했을 때 문서 1
 
 - `pipeline.py`(baseline)는 이번에 손 안 댐 — 필요하면 별도로 논의.
 - 셀3(카테고리별 독립 호출 병렬 실행) 선행 작업 재개 여부는 여전히 미답변으로 남아있음.
+
+
+## 2026-08-10 (계속) — 2차 데모(`sync/review-agent-demo-2`): `bundled_screen_hybrid`로 구조 교체
+
+### Done
+
+- `feature/review-agent` 브랜치(별도 저장소, 레포 루트의 `review-agent/`)에서 구조/모델
+  조합 실험(판정 단계 수·청킹 방식·세분화×퓨샷 콘텐츠)을 마친 결과, `bundled_screen_hybrid`
+  (2단계 screen=Gemini flash-lite→confirm=Claude Sonnet, 콜통합, 룰텍스트+퓨샷 예시)가
+  최종 채택 구조로 확정됐다. `category_screen`(1차 데모 구조)을 대체.
+- **`feature/review-agent`에서 이 브랜치엔 없던 엔진 개선을 이식**(둘 다 import 경로만
+  `planqa_review.{schema,rulebook}` → `planqa_schemas.{schema,rulebook}`로 교체):
+  `document.py`(`resolve_reported_level`/`_LEVEL_COARSENESS` — 위계 상향만 신뢰),
+  `tiers.py`(`ABSENCE_CHECK_RULE_IDS`), `instrumentation.py`(`isolate_client`/`merge_usage`),
+  `llm/base.py`(JSON 복구 정규식 — 이스케이프/트레일링 콤마로 인한 콜 실패 방지),
+  `llm/anthropic.py`(`cache_prefix` 지원 + 빈 응답 재시도), `llm/gemini.py`
+  (`DEFAULT_MODEL`을 `gemini-2.5-flash`→`gemini-flash-lite-latest`로 — 전자는 신규
+  사용자 404 확인됨), `dedupe.py`/`verifier.py`/`pipeline.py`/`diff_report.py`(import만).
+- **PR 전 보완 2건**(`bundled_screen_hybrid.py`에 반영, 근거는 `feature/review-agent`의
+  `docs/share_planning_2026-08-10.md` + 이후 실험 결과):
+  1. GA/부재확인 문서 pass 프롬프트에 "먼저 목표/KPI 문장을 모으고, 별도로 제약/역량
+     문장을 모아서 대조하라"는 단계적 지시 추가(screen/confirm 둘 다) — 시야는 있는데
+     추론 깊이가 부족해서 놓친 사례(GA-01) 대응.
+  2. `_paragraph_and_document_rules`에서 GA뿐 아니라 **LG·LF 카테고리 전체**를 문서 전체
+     pass로 이동 — 이 두 카테고리는 정의상(`_RELATIONAL_CATEGORIES`) 두 위치 간 관계
+     오류인데 문단 단위로 쪼개져 있어 애초에 먼 섹션끼리 비교할 시야가 없었음(LG-05 사례).
+     golden 데이터셋에서 LG-05/GA-01 둘 다 Level="Document"로 라벨링돼있어 이 배치가
+     golden 기대와도 일치함을 확인.
+  3. 파일럿 재검증(API 비용)은 스킵 — 로컬 유닛테스트만으로 확인.
+- **구조/파일 정리**: `structures/`는 `bundled_screen_hybrid.py`+`fewshot_bank.py`만
+  남기고 `category_screen.py`를 제거, `structures/__init__.py`도 이 구조 하나만 등록.
+  `cli.py`의 `experiment` 서브커맨드(및 그게 필요로 하던 `benchmark.py`/`experiment.py`/
+  `scoring.py`)를 제거 — ablation 도구는 `feature/review-agent`에 남기고, 이 데모는 실사용
+  경로(`review` 서브커맨드)만 노출. `notify_eval_service` 연동은 그대로 유지.
+  이제 안 쓰는 `openpyxl` 의존성도 `pyproject.toml`에서 제거.
+- 114개 테스트 전체 통과(신규 venv, `PYTHONPATH`로 `planqa_schemas` 연결).
+
+### Next
+
+- **push/PR 보류 — 사용자 명시적 승인 대기 중.** 계획 승인과 PR 승인은 별개로 확인받기로
+  합의함.
+- eval-service의 실시간 채점도 기본값이 단일 LLM 판정(`EVAL_SERVICE_ENSEMBLE` 미설정)이라
+  `tools/eval-agent`에 올린 이슈와 같은 신뢰도 문제가 있음 — 이 PR 범위 밖(다른 서비스)
+  이라 손 안 댐, 별도로 공유할 만한 내용.
+- 알려진 한계(문서화만, 이번엔 안 고침): AE-03 과탐지 잔존 위험, 위계 과대확장 미검증 —
+  프로덕션에서 eval-service로 관찰 권장.
