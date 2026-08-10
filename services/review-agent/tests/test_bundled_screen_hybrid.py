@@ -92,6 +92,48 @@ def test_review_document_two_passes_end_to_end(rulebook_path):
     assert issue.level == "Paragraph"
 
 
+def test_review_document_ignores_related_fields_for_non_relational_categories(rulebook_path):
+    # MI isn't in _RELATIONAL_CATEGORIES — even if the model tries to fill
+    # related_location/related_original_text anyway (defensive against it ignoring the
+    # null instruction), both must come back None.
+    rulebook = parse_rulebook(rulebook_path)
+    confirm_llm = ScriptedLLM(
+        [{"summary": ""}],
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "verdicts": [
+                        {
+                            "index": 0,
+                            "violated": True,
+                            "original_text": "x",
+                            "description": "d",
+                            "fix_direction": "f",
+                            "excused": False,
+                            "related_location": "이건 무시돼야 함",
+                            "related_original_text": "이것도 무시돼야 함",
+                        }
+                    ]
+                }
+            ],
+        },
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {"candidates": [{"chunk_index": 0, "rule_id": "MI-01", "quoted_text": "x", "reason": "r"}]}
+            ],
+            Level.DOCUMENT: [_EMPTY_CANDIDATES],
+        }
+    )
+
+    result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
+
+    [issue] = result.issues
+    assert issue.related_location is None
+    assert issue.related_original_text is None
+
+
 def test_review_document_respects_excused_flag(rulebook_path):
     rulebook = parse_rulebook(rulebook_path)
     confirm_llm = ScriptedLLM(
@@ -183,6 +225,7 @@ def test_review_document_dispatches_lg_and_lf_at_document_level_too(rulebook_pat
                             "fix_direction": "f",
                             "excused": False,
                             "related_location": "다른 위치",
+                            "related_original_text": "다른 위치의 원문 문장",
                         }
                     ]
                 }
@@ -203,6 +246,8 @@ def test_review_document_dispatches_lg_and_lf_at_document_level_too(rulebook_pat
     [issue] = result.issues
     assert issue.rule_id == "LG-02"
     assert issue.level == "Document"
+    assert issue.related_location == "다른 위치"
+    assert issue.related_original_text == "다른 위치의 원문 문장"
 
 
 def test_screen_and_confirm_prompts_instruct_active_cross_location_search(rulebook_path):
