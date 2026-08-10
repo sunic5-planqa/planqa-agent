@@ -30,6 +30,7 @@ class AggregateReport:
     by_category: dict[str, ConfusionCounts] = field(default_factory=dict)
     by_level: dict[str, ConfusionCounts] = field(default_factory=dict)
     new_rule_candidate_count: int = 0
+    valid_unlabeled_count: int = 0
     human_review_count: int = 0
     excused_miss_count: int = 0
 
@@ -47,9 +48,11 @@ def aggregate(result: PipelineResult) -> AggregateReport:
       check didn't excuse it (verifier.VerifiedMiss.excused) — excused misses are dropped
       from recall entirely, not counted as either a hit or a miss.
     - An unmatched predicted issue only counts as a false positive if new-rule triage
-      concluded it's a genuine misfire ("false_positive"); "new_rule_candidate" and
-      "human_review" verdicts are tracked separately and excluded from precision, since
-      penalizing the agent for spotting a real gap in the rulebook would be wrong.
+      concluded it's a genuine misfire ("false_positive"); "new_rule_candidate",
+      "valid_but_unlabeled", and "human_review" verdicts are tracked separately and
+      excluded from precision — penalizing the agent for spotting a real gap in the
+      rulebook, or for correctly catching something the golden set just never happened to
+      label, would both be wrong.
     """
     category_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     level_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
@@ -75,6 +78,7 @@ def aggregate(result: PipelineResult) -> AggregateReport:
         level_counts[miss.golden.level]["fn"] += 1
 
     new_rule_candidate_count = 0
+    valid_unlabeled_count = 0
     human_review_count = 0
     for triage in result.triage_results:
         if triage.verdict == "false_positive":
@@ -82,6 +86,8 @@ def aggregate(result: PipelineResult) -> AggregateReport:
             level_counts[triage.predicted.level]["fp"] += 1
         elif triage.verdict == "new_rule_candidate":
             new_rule_candidate_count += 1
+        elif triage.verdict == "valid_but_unlabeled":
+            valid_unlabeled_count += 1
         else:
             human_review_count += 1
 
@@ -104,6 +110,7 @@ def aggregate(result: PipelineResult) -> AggregateReport:
         by_category=by_category,
         by_level=by_level,
         new_rule_candidate_count=new_rule_candidate_count,
+        valid_unlabeled_count=valid_unlabeled_count,
         human_review_count=human_review_count,
         excused_miss_count=excused_miss_count,
     )
