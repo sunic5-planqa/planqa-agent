@@ -1008,3 +1008,271 @@ Sonnet으로 돌리기 전에, 콜분리 계열(`paragraph_verdict`/`category_fe
    `direct_verdict.py`/`bundled_*`는 이번엔 안 건드림(Phase 1&2 재실행 때 필요하면 같이
    적용 예정).
    테스트 173개 통과.
+
+## 2026-08-10 (계속 6) — Phase 3 정적 4콤보 Sonnet 파일럿 실행
+
+### Done
+
+- 4콤보(bundled_verdict/bundled_fewshot/category_fewshot/paragraph_verdict) 전부 Sonnet +
+  파일럿 5문서(DOC-001/003/006/008/012)로 실행 완료. 결과 표/분석은
+  `docs/experiments/results_2026-08-10_phase3_fewshot.md`에 정리(수치·결론은 이 문서에만,
+  아래는 구현/디버깅 관점 기록).
+- 3개 구조(bundled_fewshot/category_fewshot/paragraph_verdict)에서 각 1건씩 카테고리 콜이
+  `Expecting value: line 1 column 1`(빈 응답) 오류로 실패 — `parse_json_response`의 복구
+  폴백도 못 살릴 정도로 완전히 빈 문자열 응답이 온 경우. tier_errors로 격리돼 해당 문서의
+  나머지 카테고리 결과에는 영향 없었음. bundled(콜통합, 캐싱 미적용) 구조에서도 발생해서
+  캐시 프리픽스 도입과는 무관한, Sonnet 쪽의 산발적 빈 응답으로 보임 — 재발 빈도가 낮아
+  지금은 추가 조치 안 함(재발하면 재시도 로직 고려).
+- **정확도가 Gemini 파일럿보다 뚜렷하게 나빠짐**(FP 급증) — 원인을 review.json 내용을 직접
+  대조해서 진단함: (1) Sonnet이 Gemini보다 훨씬 철저해서 지적 자체가 3~4배 늘어남(특히
+  MI-05류 "예외 처리 누락"을 숫자 제한 문장마다 지적), (2) 콜분리 구조는 카테고리 간에
+  서로 뭘 지적했는지 알 수가 없어서 같은 문장이 여러 룰로 중복 지적되는 정도가 콜통합보다
+  훨씬 심함(DOC-003 한 문장이 콜분리에서는 7개 룰, 콜통합에서는 2개 룰로 지적됨). 둘 다
+  진단만 하고 코드는 안 고침 — 사용자에게 결과 문서로 먼저 보고하고, ①②를 Sonnet으로
+  재검증하는 게 먼저인지 논의 중.
+
+### Next
+
+- ①(direct_verdict/cell3)·②(paragraph_verdict, 이미 이번에 재실행함)를 Sonnet 정책으로
+  재검증할지 결정 — 콜분리가 Sonnet에서 콜통합보다 중복 지적이 더 심하다는 이번 관찰이
+  ②의 결론(문단형=콜분리가 precision도 더 높다)을 흔들 수 있어서, 동적퓨샷 콤보 추가
+  구현보다 이 재검증을 먼저 하자고 제안함(`results_2026-08-10_phase3_fewshot.md` 결론
+  참고).
+- cell3(screen=Gemini/confirm=Sonnet, 혼합 백엔드)를 재검증하려면 `experiment` CLI
+  서브커맨드에 `review`처럼 `--screen-backend`/`--confirm-backend` 분리 플래그가 없어서
+  지금은 못 돌림 — 필요해지면 CLI에 추가할 것.
+
+
+## 2026-08-10 (계속 7) — direct_verdict/cell3 최적화 포팅 + ①② Sonnet 재검증
+
+### Done
+
+- `direct_verdict.py`/`cell3.py`에 콜분리 최적화 포팅: 동적 `max_workers`(위계별 카테고리
+  수만큼 한꺼번에 병렬, 기존 고정 4에서 배치 대기 제거) + Anthropic 프롬프트 캐싱
+  (`cache_prefix`로 위계 공유 문서 본문을 분리).
+- `cell3.py`의 confirm 단계(`_CONFIRM_SYSTEM`)에 다른 5개 구조에 이미 적용된 증합/레벨승격/
+  허위대립 방지 지시문 포팅 + `resolve_reported_level` 파싱 반영 — 안 그러면 direct_verdict만
+  이 지시문의 이점을 받아 ① 비교가 불공정해짐.
+- `experiment` CLI에 `--screen-backend`/`--confirm-backend` 분리 플래그 추가(`review`
+  서브커맨드엔 있었지만 `experiment`엔 없어서 cell3의 혼합 백엔드 파일럿이 막혀있었음).
+  `ExperimentConfig`/`run_experiment`도 함께 확장.
+- **Anthropic 빈 응답/깨진 JSON을 재시도 대상으로 변경**: 첫 direct_verdict Sonnet
+  파일럿에서 140콜 중 10콜이 "Expecting value: line 1 column 1"(빈 텍스트 블록)으로
+  유실됨 — 기존엔 API 호출 자체는 200으로 성공했지만 내용이 비어있거나 깨진 경우를
+  재시도 대상으로 안 봐서 그 카테고리 결과가 통째로 사라졌음. `llm/anthropic.py`의
+  `complete_json`에서 `parse_json_response` 실패(ValueError, JSONDecodeError 포함)도
+  기존 429/5xx/연결오류와 같은 재시도 루프에 태움(동일 요청 재시도로 실제 해결되는 걸
+  확인함 — temperature=0인데도 결정적이지 않은 디코딩 실패로 보임). 테스트 2개 추가,
+  전체 175개 통과.
+  - 재시도 적용 후 direct_verdict 재실행은 140콜 중 1콜만 실패(4회 재시도 다 실패,
+    내용 자체가 지속적으로 문제인 케이스로 보임 — 더 깊이는 안 팜), cell3는 4콜 실패.
+    소수 잔존 실패는 tier_errors로 격리되어 나머지 결과에 영향 없음.
+- **①②를 Sonnet 정책으로 재검증**: `outputs/experiments/phase1_stage_count_sonnet/
+  {direct_verdict,cell3,paragraph_verdict}`. 결과/분석은
+  `docs/experiments/results_2026-08-10_phase1_2_sonnet_revalidation.md`에 정리(요약: ②는
+  Sonnet에서도 문단형이 우세 그대로 유지, **①은 뒤집힘** — Gemini+Gemini에서는 1단계
+  (direct_verdict)가 이겼는데 Sonnet에서는 2단계(cell3)가 precision 3.8배 더 높음. Gemini
+  스크리닝이 Sonnet의 과다지적 성향을 걸러주는 역할을 하는 것으로 보임).
+
+### Next
+
+- ①이 뒤집힌 것의 함의: Phase 3(세분화×퓨샷)를 direct_verdict/paragraph_verdict(스크리닝
+  없음) 기반으로 계속 쌓기보다, cell3형(Gemini 스크리닝+Sonnet 정밀판정) 기반으로 다시
+  검토할지 결정 필요 — 사용자에게 보고 후 논의.
+- 동적퓨샷 2콤보는 위 결정 이후로 보류.
+
+
+## 2026-08-10 (계속 8) — cell3형 기준 4콤보 신규 구현 + 파일럿
+
+### Done
+
+- 사용자 결정: Phase 3(세분화×퓨샷) 기준 구조를 direct_verdict/paragraph_verdict(1단계,
+  스크리닝 없음) 대신 cell3형(2단계 screen→confirm)으로 전환.
+- 신규 구조 4개 작성: `structures/{paragraph_screen,paragraph_screen_fewshot,
+  bundled_screen,bundled_screen_fewshot}.py` — paragraph_verdict/bundled_verdict의 문단형
+  청킹(GA·부재확인형만 문서 전체 1회)에 cell3의 screen→confirm 2단계 패턴을 결합. 콜분리
+  버전(paragraph_screen*)은 카테고리별 독립 screen/confirm + 동적 max_workers + 캐시
+  프리픽스, 콜통합 버전(bundled_screen*)은 패스당 screen 1콜 + confirm 1콜(카테고리 안
+  나눔). confirm 시스템 프롬프트는 cell3.py에 이미 반영된 증합/레벨승격/허위대립 방지
+  지시문 그대로 사용. `STRUCTURES`에 4개 등록 + 각 구조 테스트 작성, 전체 191개 통과.
+- 4콤보를 screen=Gemini/confirm=Sonnet, 파일럿 5문서로 실행. 결과/분석은
+  `docs/experiments/results_2026-08-10_phase3_screen_static4.md`에 정리(요약: 스크리닝
+  추가가 precision을 콜분리 약 3.5배, 콜통합 약 1.7배 개선함. 콜분리(paragraph_screen)가
+  이번 표본에서 정확도 최고(6.7%), 콜통합(bundled_screen)이 비용 대비 효율 최고(26콜/
+  112K토큰). 퓨샷만 조합은 여전히 recall 0).
+- paragraph_screen 파일럿에서 3건(빈 응답/깨진 JSON, 재시도 4회 모두 실패)이 남았으나
+  전체 86콜 중 소수라 결과에 큰 영향 없음.
+
+### Next
+
+- 동적퓨샷 2콤보(콜분리×동적퓨샷, 콜통합×동적퓨샷)도 이제 2단계 기준으로 구현할지 결정
+  필요.
+- 퓨샷 축은 이번 표본(golden 6건)으로는 결론 어려움 — 더 큰 표본/다른 문서셋 필요.
+- 최종적으로 direct_verdict/cell3/paragraph_verdict 등 나머지 구조들도 이번에 확정된
+  구조(문단형+2단계) 기준으로 정리 필요한지 검토.
+
+
+## 2026-08-10 (계속 9) — 퓨샷 상세 구성 3종 구현 (API 재개 전, 코드만)
+
+### Done
+
+- API 사용량 소진(결제 후 재개 예정)이라 파일럿 없이 코드만 준비. 사용자 피드백 4가지를
+  반영해 계획을 재설계함: (1) 선정 재검토는 기계적 채우기가 아니라 후보를 직접 다 읽고
+  판단, (2) 리키지 안전 범위를 "벤치마크 20문서 전체 제외"에서 "지금 파일럿에 실제로 쓰는
+  5문서(DOC-001/003/006/008/012)만 제외"로 좁힘, (3) 합성 예시는 여전히 전혀 안 씀(사용자가
+  한 번 "이제 써도 될 것 같다"고 했다가 실제 후보 수가 늘어난 걸 보고 바로 철회 —
+  `feedback_no_synthetic_fewshot_examples` 메모리에 기록함), (4) 선정 재검토와 비율 조정을
+  같은 결과물에 동시에 바꾸지 않고 분리해서 독립적으로 테스트할 수 있게 함.
+- **리키지 범위 재조사**: 파일럿 5문서만 제외하는 새 범위로 다시 조회하니 AE-03이 0개→
+  1개, MI-05가 0개→3개로 늘어남(나머지 39개 룰은 원래도 2개 이상). 예외 예시(전부 합성
+  스니펫, 원래도 리키지 무관)는 26개 룰에 2~5개.
+- **`fewshot_bank.py` 완전 재작성**: 위반 예시 후보(41개 룰, 125행) + 예외 예시 후보(26개
+  룰, 59행)를 전부 직접 읽고 큐레이션(대표성/명확성/길이 판단, 예: 전체 가짜 PRD를 인용한
+  지나치게 긴 DOC-000 예시보다 짧고 명확한 실제 문서 예시를 우선, rationale이 빈 문자열인
+  행은 뒤로 미룸). `ALL_VIOLATION_CANDIDATES`/`ALL_EXCEPTION_CANDIDATES`(uncapped, 큐레이션
+  순서)를 소스로 두고, `VIOLATION_EXAMPLES`(캡2)/`EXCEPTION_EXAMPLES`(캡1, 재선정된 기준선)/
+  `EXCEPTION_EXAMPLES_RATIO`(캡2, 비율 조정용)를 파생시킴. 재추출·재정렬은 일회성 스크립트로
+  처리(런타임에는 xlsx를 안 읽는 기존 컨벤션 유지).
+- **`EXCEPTION_EXAMPLES`를 리스트형으로 변경**(기존 단일 객체) — 소비 파일 6개
+  (`category_fewshot.py`, `bundled_fewshot.py`, `paragraph_screen_fewshot.py`,
+  `bundled_screen_fewshot.py`, `paragraph_screen_hybrid.py`, `bundled_screen_hybrid.py`)의
+  exception 처리부를 리스트 순회로 수정.
+- **비율 조정 축 — 새 구조 2개**: `paragraph_screen_fewshot_ratio.py`,
+  `bundled_screen_fewshot_ratio.py` — 재선정된 기준선과 완전히 동일하고 `EXCEPTION_EXAMPLES`
+  (1개) 대신 `EXCEPTION_EXAMPLES_RATIO`(2개)만 참조. 이렇게 해서 나중에 파일럿 돌리면
+  "예외 예시 개수" 하나만의 순수 효과를 볼 수 있음.
+- **동적퓨샷 축 — 유사도 검색 모듈 + 새 구조 2개**: `structures/fewshot_retrieval.py`
+  (문자 2-gram 자카드 유사도, 임베딩 API 없이 시작 — 한국어는 공백 토큰화가 약해서 문자
+  n-gram이 표준적인 대안). `top_k_examples(reference_text, rule_id, k=2, candidates=None)` —
+  기본은 `ALL_VIOLATION_CANDIDATES`(uncapped 전체 풀)에서 검색, 테스트 용이성을 위해
+  `candidates` 오버라이드 가능. `paragraph_screen_dynamic_fewshot.py`,
+  `bundled_screen_dynamic_fewshot.py` — 위반 예시만 동적 검색으로 교체(그 패스의 chunk_
+  block 전체와 비교, 청크별 재검색은 v2로 미룸), 예외 예시는 정적(캡1) 그대로.
+- `STRUCTURES`에 4개(ratio×2, dynamic×2) 신규 등록. 전체 테스트 219개 통과(fewshot_bank
+  검증 포함 — 리키지 검사 범위를 파일럿 5문서 기준으로 재작성, AE-03/MI-05가 이제 실제
+  예시를 갖는다는 것도 명시적으로 테스트).
+- **API 호출 없음** — 이번 라운드는 전부 코드/데이터 큐레이션/테스트만.
+
+### 유지보수 주의사항
+
+리키지 안전 범위를 "벤치마크 20문서 전체"가 아니라 "지금 파일럿에 실제로 쓰는 5문서"로
+좁혔음. **파일럿 대상 문서를 5개보다 늘리면(예: 20문서 전체로 확장), 그 시점에
+`fewshot_bank.py`를 다시 검토해서 새로 추가되는 문서의 golden 행이 안 섞였는지 확인해야
+함.**
+
+### Next
+
+- API 재개 후: 신규 4콤보(ratio×2, dynamic×2) + 기존 재선정된 기준선(paragraph_screen_
+  fewshot/bundled_screen_fewshot, 재선정으로 콘텐츠가 바뀌었으니 재파일럿 필요)을 파일럿
+  5문서로 실행, 비교표 작성.
+- 팀원이 GitHub에 올린 eval-agent 수정본(precision 관련, `overall_relaxed`/
+  `valid_but_unlabeled` triage 등, 아직 최종 버전 아님)이 확정되면, review-agent 자체
+  채점 대신 그 파이프라인으로 재채점하는 것도 검토.
+
+
+## 2026-08-10 (계속 10) — 퓨샷 콘텐츠 축 3방향 파일럿 (API 재개 후)
+
+### Done
+
+- API 재개 후 4콤보 실행: paragraph_screen_fewshot/bundled_screen_fewshot(재선정된 뱅크로
+  재실행) + paragraph_screen_hybrid/bundled_screen_hybrid(신규). screen=Gemini, confirm=
+  Sonnet, 파일럿 5문서. 결과는 `docs/experiments/results_2026-08-10_phase3_content_axis.md`
+  (요약: bundled_screen_hybrid가 precision 33.3%로 이번 세션 최고치. 퓨샷만은 재선정 후에도
+  recall 0% 유지 — AE-03 실 예시 1개가 생겼는데도 퓨샷만 구조는 AE-03을 전혀 안 잡았고,
+  룰+퓨샷 구조는 AE-03 3건 중 1건을 잡음. 콜분리/콜통합 우열이 콘텐츠에 따라 다시 뒤집힘).
+- eval-agent 통합 준비: 팀원의 최신 eval-agent(origin/main, `tools/eval-agent` +
+  `packages/planqa-schemas`)를 별도 git worktree(`../eval-agent-latest`)로 체크아웃, venv +
+  의존성 설치 완료(uv 없어서 pip + PYTHONPATH로 로컬 패키지 두 개를 직접 연결). review-agent
+  의 `predictions.json`(`experiment.py`가 이미 실험별로 생성)이 eval-agent의
+  `--predictions`가 기대하는 바로 그 포맷임을 확인(`docs/adr/0001-review-agent-output-
+  contract.md`에 문서화돼있던 기존 계약).
+- **Gemini API 키 rate limit** — `GEMINI_API_KEYS`(6개 라운드로빈) 전부 소진. 사용자가 새
+  키 제공 예정, 그때까지 eval-agent 채점(자체 LLM 매칭/저지 콜 필요) 보류.
+- eval-agent 모델 정책 확인: 기본 백엔드 Gemini, 모델 `gemini-flash-lite-latest`(Claude는
+  eval-agent에 아예 연결 안 돼있음, "cheap-first" 정책) — 이미 가장 가벼운 옵션이라 별도
+  설정 없이 기본값 사용하기로 함.
+
+### Next
+
+- 새 Gemini 키 받으면: `paragraph_screen`/`bundled_screen`(룰만, 기존)/`paragraph_screen_
+  fewshot`/`bundled_screen_fewshot`(퓨샷만, 재선정)/`paragraph_screen_hybrid`/`bundled_
+  screen_hybrid`(룰+퓨샷) 6개 구조의 `predictions.json`을 eval-agent로 채점 — review-agent
+  자체 채점(strict) 대비 `overall_relaxed`/`valid_but_unlabeled` 제외 precision이 얼마나
+  다른지 비교.
+
+
+## 2026-08-10 (계속 11) — eval-agent로 6개 구조 재채점
+
+### Done
+
+- 새 Gemini 키로 eval-agent(origin/main 최신) 실행, 6개 구조(paragraph_screen/bundled_
+  screen/paragraph_screen_fewshot/bundled_screen_fewshot/paragraph_screen_hybrid/bundled_
+  screen_hybrid)의 `predictions.json`을 전부 재채점. 결과는 `docs/experiments/
+  results_2026-08-10_eval_agent_rescoring.md`.
+- **핵심 발견**: review-agent 자체채점의 FP 대부분이 eval-agent LLM judge에게 `valid_but_
+  unlabeled`(golden에 없지만 실제로 맞는 지적)로 재분류됨 — 구조당 최대 17건. 예:
+  paragraph_screen은 자체채점 precision 6.7% → eval-agent relaxed precision 100%.
+- **직접 발견한 버그성 이슈**: eval-agent의 `_scope_to_predicted_docs`(golden을 predicted가
+  다룬 문서로만 좁히는 로직)가 "5문서를 다 검토했지만 일부 문서에서 0건 지적"인 우리
+  상황을 "그 문서를 검토 안 함"으로 오인식 — bundled_screen_fewshot(DOC-003만 남음, golden
+  6건→2건), paragraph_screen_hybrid(golden 6→5건), bundled_screen_hybrid(golden 6→4건)의
+  recall 분모가 구조마다 달라짐. TP는 영향 없지만 recall이 구조별로 다른 기준으로 계산돼
+  있어서, 전체 6건 기준으로 수동 보정(TP/6)해서 다시 비교함 — 보정 후
+  paragraph_screen_hybrid/bundled_screen_hybrid의 recall이 40%/50% → 33.3%로 낮아짐
+  (precision은 이 문제와 무관해서 그대로 유효).
+- eval-agent 실행 인프라: `../eval-agent-latest`에 origin/main을 별도 git worktree로
+  체크아웃, pip+PYTHONPATH로 `planqa_eval`/`planqa_schemas` 로컬 패키지 연결(uv 없음).
+  `run_full_evaluation`을 직접 호출하는 일회성 스크립트로 6개 일괄 실행.
+
+### Next
+
+- eval-agent의 문서 스코핑 이슈는 팀원에게 참고로 공유할 만한 내용(우리 사용 패턴과
+  가정이 다름) — 필요하면 전달.
+- 최종 결론: precision은 bundled_screen_hybrid가 압도적(자체채점 33.3%→eval-agent 100%),
+  recall은 보정 후 bundled_screen/paragraph_screen_hybrid/bundled_screen_hybrid 3파전
+  (33.3% 동률) — 종합적으로 bundled_screen_hybrid가 비용도 최저라 1순위 후보로 유지.
+
+
+## 2026-08-10 (계속 12) — hybrid 기반 퓨샷 세부 축 3종 (위반예시↑/예외예시↑/동적검색)
+
+### Done
+
+- **축 재설계**: 이전 세션에 만들어둔 `*_fewshot_ratio`/`*_dynamic_fewshot` 4개 구조는
+  이미 기각된 "퓨샷만" 축 위에 있어서 "hybrid를 더 다듬으면 나아지는가"에 답을 못 함 —
+  `bundled_screen_hybrid`를 베이스로 3개 축을 새로 만들어 각각 독립 테스트:
+  `bundled_screen_hybrid_violation_ratio`(위반 예시 2→3개), `bundled_screen_hybrid_ratio`
+  (예외 예시 1→2개, 기존 파일 그대로 재활용), `bundled_screen_hybrid_dynamic`(위반·예외
+  둘 다 정적 최상위 N 대신 유사도 기반 동적 검색 — 원래 위반만 동적이었던 걸 예외도
+  동적으로 확장). `fewshot_bank.py`에 `VIOLATION_EXAMPLES_RATIO`(위반 3개 슬라이스) 추가,
+  모듈 docstring을 세 축 설명으로 재작성. `fewshot_retrieval.top_k_examples`의 타입힌트를
+  `FewShotExample`/`FewShotException` 둘 다 받을 수 있도록 `Protocol`로 일반화.
+- **실데이터 상한 확인**: 위반 예시는 40개 룰 중 32개가 3개 이상 있어 ①을 대부분 룰에
+  적용 가능(AE-03만 실 후보 1개라 그대로 유지). 예외 예시는 26개 룰 중 23개가 정확히
+  2개까지뿐이라 ②는 이미 대부분 룰에서 실데이터 상한 — 합성 금지 원칙상 더 못 늘림.
+- **CLI 함정 발견**: `planqa_review/cli.py`에 `if __name__ == "__main__":` 가드가 없어서
+  `python -m planqa_review.cli ...`로 실행하면 모듈만 import되고 `main()`이 전혀 호출되지
+  않음(출력도 없고 exit code도 0이라 눈치채기 어려움) — 실제 진입점은 `pyproject.toml`의
+  콘솔 스크립트 `.venv/Scripts/planqa-review.exe`. 파일럿 실행 전 이걸로 30분 가까이
+  헤맸음 — 다음 세션은 반드시 `planqa-review.exe experiment ...`로 실행할 것(`python -m`
+  아님).
+- 파일럿 5문서, screen=Gemini/confirm=Sonnet 조건으로 3개 구조 실행 후 eval-agent
+  재채점(`../eval-agent-latest` worktree 재사용). 결과는 `docs/experiments/
+  results_2026-08-10_phase3_hybrid_subaxis.md`.
+- **핵심 발견**: review-agent 자체채점으로는 세 축 모두 기준선(precision 33.3%)보다
+  나빠 보였다(16.7%/16.7%/25.0%) — 그런데 eval-agent 재채점 결과 **네 구조(기준선+3축)
+  모두 TP=2(recall 33.3%), precision 100%로 완전히 동률**이었다. 자체채점의 "정확도 하락"
+  은 실제 오답이 아니라, 예시를 더 준 구조일수록 golden에 없는 것도 더 많이 지적했고
+  (valid_unlabeled 1→4/4/2건), 그 지적들이 eval-agent judge 검토 결과 전부 실제로 맞는
+  지적이었기 때문 — "예시를 늘리면 더 넓게 지적하게 되지만, 이번 골든 6건을 더 맞히거나
+  틀리게 만들지는 않는다."
+- **결론: 세 축 모두 채택 안 함, 기준선(`bundled_screen_hybrid`) 그대로 유지 추천** —
+  정확도 개선 없이 비용만 26~28% 증가(콜 수 19→20~22, 토큰 148,706→187K~190K).
+
+### Next
+
+- 세 축 모두 "이번 표본에서는 득이 없다"는 결론이지 "영원히 무효"는 아님 — 골든
+  데이터셋이 커지면(20문서 전체 등) 재검증 가치 있음, 지금 결론을 뒤집을 근거는 아님.
+- 실험은 이걸로 일단 마무리 국면 — 최종 결론 문서는 여전히
+  `docs/experiments/results_2026-08-10_final_summary.md`(단, hybrid_subaxis 라운드는
+  거기 반영 안 돼있으니 다음에 갱신 여지 있음).
+- 이번 세션도 전부 uncommitted 상태 — 커밋 여부는 사용자 확인 필요(요청 없이 커밋 안 함).
