@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from planqa_review.dedupe import dedupe_issues
 from planqa_review.document import Chunk, parse_document, resolve_reported_level
-from planqa_review.instrumentation import CallEvent, record_call
+from planqa_review.instrumentation import CallEvent, isolate_client, merge_usage, record_call
 from planqa_review.llm.base import LLMClient
 from planqa_review.pipeline import ReviewResult
 from planqa_schemas.rulebook import RuleBook, RuleDef
@@ -222,6 +223,68 @@ def _paragraph_and_document_rules(rulebook: RuleBook) -> tuple[list[RuleDef], li
 # bundled_screen_hybrid — bundled_screen/bundled_screen_fewshot과 판정 방식·청킹은
 # 동일(2단계, 문단형)하지만, screen/confirm 양쪽 프롬프트에 룰 텍스트와 fewshot 예시를
 # 함께 준다.
+def _run_pass(
+    level: Level,
+    rules: list[RuleDef],
+    chunks: list[Chunk],
+    doc_id: str,
+    global_context: str,
+    document_text: str,
+    rulebook: RuleBook,
+    screen_llm: LLMClient,
+    confirm_llm: LLMClient,
+) -> tuple[list[Issue], list[CallEvent], str | None]:
+    # The passed-in screen_llm/confirm_llm are the shared originals — isolate_client() below
+    # gives this pass its own private copies (record_call's usage-diffing races if two
+    # passes share one client's usage list). key=level lets test doubles route scripted
+    # responses by which pass is asking instead of by call order, which real backends don't
+    # need (they ignore key) but is required for tests since call order across concurrently-
+    # dispatched passes isn't deterministic. merge_usage folds each copy's calls back onto
+    # the shared original client once this pass is done, so cli.py's run-stats (which reads
+    # screen_llm.usage/confirm_llm.usage on the *original* objects directly) still sees
+    # every call.
+    events: list[CallEvent] = []
+    isolated_screen = isolate_client(screen_llm, key=level)
+    isolated_confirm = isolate_client(confirm_llm, key=level)
+    try:
+        candidates = record_call(
+            isolated_screen,
+            stage="screen",
+            tier=level,
+            rule_ids=tuple(rule.rule_id for rule in rules),
+            events=events,
+            call=lambda: _screen_pass(chunks, rules, global_context, isolated_screen),
+        )
+        if not candidates:
+            return [], events, None
+        rules_by_id = {rule.rule_id: rule for rule in rules}
+        candidate_rule_ids = tuple(sorted({candidate.rule_id for candidate in candidates}))
+        issues = record_call(
+            isolated_confirm,
+            stage="confirm",
+            tier=level,
+            rule_ids=candidate_rule_ids,
+            events=events,
+            call=lambda: _confirm_pass(
+                candidates,
+                chunks,
+                rules_by_id,
+                doc_id,
+                level,
+                global_context,
+                document_text,
+                rulebook,
+                isolated_confirm,
+            ),
+        )
+        return issues, events, None
+    except Exception as error:  # noqa: BLE001 - one pass's failure shouldn't sink the whole review
+        return [], events, f"{level.value} 패스 검토 실패: {error}"
+    finally:
+        merge_usage(screen_llm, isolated_screen)
+        merge_usage(confirm_llm, isolated_confirm)
+
+
 def review_document(
     doc_id: str,
     document_text: str,
@@ -253,35 +316,34 @@ def review_document(
         (Level.PARAGRAPH, paragraph_rules, list(tree.chunks_for(Level.PARAGRAPH))),
         (Level.DOCUMENT, document_rules, list(tree.chunks_for(Level.DOCUMENT))),
     )
-    for level, rules, chunks in passes:
-        if not chunks or not rules:
-            continue
-        try:
-            candidates = record_call(
-                screen_llm,
-                stage="screen",
-                tier=level,
-                rule_ids=tuple(rule.rule_id for rule in rules),
-                events=events,
-                call=lambda level=level, rules=rules, chunks=chunks: _screen_pass(chunks, rules, global_context, screen_llm),
-            )
-            if not candidates:
-                continue
-            rules_by_id = {rule.rule_id: rule for rule in rules}
-            candidate_rule_ids = tuple(sorted({candidate.rule_id for candidate in candidates}))
-            issues = record_call(
-                confirm_llm,
-                stage="confirm",
-                tier=level,
-                rule_ids=candidate_rule_ids,
-                events=events,
-                call=lambda level=level, chunks=chunks, candidates=candidates, rules_by_id=rules_by_id: _confirm_pass(
-                    candidates, chunks, rules_by_id, doc_id, level, global_context, document_text, rulebook, confirm_llm
-                ),
-            )
-            all_issues.extend(issues)
-        except Exception as error:  # noqa: BLE001 - one pass's failure shouldn't sink the whole review
-            tier_errors.append(f"{level.value} 패스 검토 실패: {error}")
+    active_passes = [(level, rules, chunks) for level, rules, chunks in passes if chunks and rules]
+
+    # Paragraph and Document passes only depend on the already-computed global_context, not
+    # on each other, so they run concurrently instead of sequentially doubling the wall
+    # time. See _run_pass for why each pass needs its own isolated client copy.
+    if active_passes:
+        with ThreadPoolExecutor(max_workers=len(active_passes)) as pool:
+            futures = {
+                level: pool.submit(
+                    _run_pass,
+                    level,
+                    rules,
+                    chunks,
+                    doc_id,
+                    global_context,
+                    document_text,
+                    rulebook,
+                    screen_llm,
+                    confirm_llm,
+                )
+                for level, rules, chunks in active_passes
+            }
+            for level, future in futures.items():
+                issues, pass_events, error = future.result()
+                all_issues.extend(issues)
+                events.extend(pass_events)
+                if error:
+                    tier_errors.append(error)
 
     return ReviewResult(
         doc_id=doc_id,

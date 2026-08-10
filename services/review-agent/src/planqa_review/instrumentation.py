@@ -51,14 +51,23 @@ def record_call(
     return result
 
 
-# Shallow-copies `llm` with a fresh, private usage list — gives each concurrent branch (one
-# per category/rule/etc.) its own accumulator before passing it to record_call, so branches
-# sharing one real client (same API keys/HTTP session, still reused by reference) never race
-# on the same usage list. Merge the isolated copy's usage back onto the original with
-# merge_usage once the branch finishes, so the original client's own .usage (what
-# run_stats.build_run_stats reads for the top-level screen/confirm totals) still reflects
-# every call made through it.
-def isolate_client(llm: LLMClient) -> LLMClient:
+# Gives each concurrent branch (one per category/rule/tier/etc.) its own private usage
+# accumulator before passing it to record_call, so branches sharing one real client (same
+# API keys/HTTP session, still reused by reference) never race on the same usage list.
+# Merge the isolated copy's usage back onto the original with merge_usage once the branch
+# finishes, so the original client's own .usage (what run_stats.build_run_stats reads for
+# the top-level screen/confirm totals) still reflects every call made through it.
+#
+# `key` identifies which concurrent branch is asking (e.g. a Level) — real backends ignore
+# it and just get a plain shallow copy (a fresh usage list is all they need; each call is a
+# live network round-trip, nothing else to isolate). Test doubles that need to route
+# scripted responses by branch identity instead of by call order (no longer well-defined
+# once branches run on real threads) can define `isolate(self, key)` themselves — see
+# conftest.ScriptedLLM — which this calls instead of the default copy.copy() when present.
+def isolate_client(llm: LLMClient, *, key: object | None = None) -> LLMClient:
+    isolate = getattr(llm, "isolate", None)
+    if callable(isolate):
+        return isolate(key)
     isolated = copy.copy(llm)
     isolated.usage = []
     return isolated
