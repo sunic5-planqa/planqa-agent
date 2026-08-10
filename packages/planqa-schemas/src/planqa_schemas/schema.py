@@ -44,3 +44,8 @@ class Issue:
     # 단일 위치 오류라 항상 None. 채워지는 곳: confirm 단계 verdict 응답.
     # (github.com/sunic5-planqa/planqa-agent issue #4)
     related_location: str | None = None
+    # related_location은 라벨 문자열("5-2. 환불 정책")뿐이라 프론트가 그 위치의 실제 문구를
+    # 수정 제안하지 못함 — original_text와 같은 성격의, 두 번째 위치의 정확한 인용문. 같은
+    # 자리·같은 조건(related_location과 함께, LG/LF/GA일 때만 채워지고 나머지는 항상 None).
+    # (github.com/sunic5-planqa/planqa-agent issue #29)
+    related_original_text: str | None = None
