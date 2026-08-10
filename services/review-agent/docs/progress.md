@@ -791,3 +791,70 @@ Haiku 스크리닝/Sonnet 정밀판정으로 라이브 검증했을 때 문서 1
   이라 손 안 댐, 별도로 공유할 만한 내용.
 - 알려진 한계(문서화만, 이번엔 안 고침): AE-03 과탐지 잔존 위험, 위계 과대확장 미검증 —
   프로덕션에서 eval-service로 관찰 권장.
+
+## 2026-08-10 — bundled_screen_hybrid의 2개 pass 병렬화
+
+PR #21 머지 직후, `bundled_screen_hybrid.review_document()`가 Paragraph/Document 2개
+pass를 순차 실행하고 있던 걸 발견(category_screen.py 삭제로 지난번 병렬화 작업도 같이
+사라짐) — 사용자 요청으로 병렬화.
+
+### Done
+
+- `_run_pass`를 새로 뽑아서 Paragraph/Document 2개 pass를 `ThreadPoolExecutor`로 동시
+  실행. 팀원이 이미 만들어둔 `instrumentation.isolate_client`/`merge_usage`(cell3.py용으로
+  선제적으로 준비돼 있었으나 아직 아무 데도 안 쓰이고 있었음)를 그대로 활용.
+- **`isolate_client`에 진짜 스레드 안전성 버그 발견**: 기존 구현은 `copy.copy(llm)`만
+  쓰는데, `ScriptedLLM`(테스트 더블)엔 커스텀 `__copy__`가 없어서 얕은 복사가 `_responses`
+  iterator를 그대로 공유 — 두 pass가 같은 iterator에서 경쟁하면 GA-01처럼 Document
+  전용으로 설계된 룰의 스크리닝 응답이 Paragraph pass로 잘못 갈 수 있음. 8회 반복 실행은
+  전부 통과했지만(GIL+무지연 fake 호출이라 순서가 거의 항상 보존됨), 이건 안전 보장이
+  아니라 우연 — category_screen.py 때와 같은 함정.
+- `isolate_client(llm, *, key=None)`에 선택적 `key` 파라미터 추가 — 실제 백엔드는
+  무시(기존 `copy.copy()` 그대로), `llm.isolate(key)`가 정의돼 있으면 그걸 우선 호출.
+  `bundled_screen_hybrid._run_pass`는 `key=level`로 호출.
+- `ScriptedLLM`(conftest.py)에 `keyed_responses: dict[Any, list[Any]]` + `isolate(key)`
+  추가(예전 category_screen 전용이었던 `tier_responses`/`clone(tier=)`를 범용 dict 기반으로
+  일반화 — `TIER_ORDER` 의존성 제거, 어떤 키든 사용 가능). 6개 테스트를 `Level.PARAGRAPH`/
+  `Level.DOCUMENT` 키 기반으로 재작성.
+- 120/120 테스트 통과, `test_bundled_screen_hybrid.py` 15회 반복 실행으로 flaky 여부 확인.
+- 라이브 검증(DOC-001, Haiku 양쪽 다): 55.4초 — `by_stage` 합산 103.6초가 벽시계 55.4초로
+  압축됨, 실측 약 1.9배 단축.
+
+### Next
+
+- 여전히 category_screen 때와 마찬가지로, 확장 가능한 concurrency 인프라(isolate_client
+  + key)는 이제 review-agent 공통 자산 — 다음에 pass/tier가 3개 이상인 구조가 나오면
+  바로 재사용 가능.
+
+## 2026-08-10 (마무리) — main 승격 전 코드 리뷰, 진짜 버그 2건 + 강화 2건
+
+dev→main 승격 전 요청받은 코드 리뷰. 5건 중 4건 조치(GIL 관련 1건은 현재 배포 환경에서
+실제 위험 없어 문서화만).
+
+### Done
+
+- **진짜 버그**: `GeminiClient._current`(다중 키 라운드로빈 인덱스)가 평범한 int라
+  `isolate_client`의 `copy.copy()`가 값으로 복사 — 동시 실행되는 두 pass가 각자 독립된
+  라운드로빈 인덱스를 갖게 돼서, 한쪽 pass가 429로 배운 "이 키는 방금 막힘" 정보가
+  다른 pass나 원본 client에 전혀 전달 안 됨(`merge_usage`는 `.usage`만 병합, 이 상태는
+  안 건드림). `_current`를 공유 mutable cell(`[0]`)+`threading.Lock`으로 변경 —
+  `copy.copy()`가 자연스럽게 레퍼런스를 공유하므로 모든 isolated 복사본과 원본이 진짜로
+  같은 라운드로빈 상태를 본다. 직접 실행으로 공유 확인(`isolate_client`로 만든 두 복사본이
+  같은 `_current` 객체 식별성 공유, 한쪽에서 회전하면 원본·다른 복사본에도 즉시 반영).
+  신규 `test_llm_gemini.py`(이 백엔드 첫 테스트 파일) 2개로 회귀 고정.
+- **진짜 버그**: `bundled_screen_hybrid._run_pass`에서 `isolate_client()` 호출이
+  `try` 블록 **밖**에 있어서, 실패 시 `review_document()` 전체가 크래시(그 pass만
+  tier_error로 격리되는 게 아니라). `isolate_client()` 호출을 `try` 안으로 이동,
+  `finally`에서 `isolated_screen`/`isolated_confirm`이 `None`이 아닐 때만 `merge_usage`.
+- **강화**: `ScriptedLLM.isolate()`가 `keyed_responses` 없이 key만 받으면 조용히 `self`를
+  반환해서 concurrent race를 재도입할 위험 — `ValueError`로 명확히 실패하도록 변경.
+  신규 테스트로 `result.tier_errors`에 메시지가 잡히는지 확인(isolate_client 실패도
+  다른 pass 실패와 동일하게 tier_error로 격리되므로, 예외가 밖으로 안 나가는 게 맞는
+  동작 — 테스트도 그에 맞춰 작성).
+- **강화(경미)**: active pass가 1개뿐일 때 `ThreadPoolExecutor` 생성 자체를 스킵하고
+  `_run_pass`를 직접 호출 — 병렬화할 게 없을 때 스레드풀 오버헤드 제거.
+- GIL 원자성 가정(`merge_usage`)은 pre-existing이고 표준 CPython 배포 환경에선 실제
+  위험 없어서 손 안 댐 — free-threaded 빌드 전환 시에만 재검토 필요.
+- 123/123 review-agent 테스트 통과(120 + 3 신규), `test_bundled_screen_hybrid.py`/
+  `test_llm_gemini.py` 10회 반복으로 flaky 여부 확인. eval-agent 84, eval-service 19
+  영향 없음 — 총 226/226.
