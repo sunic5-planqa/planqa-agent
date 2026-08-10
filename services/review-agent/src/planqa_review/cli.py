@@ -10,14 +10,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from planqa_review.llm.factory import build_llm_client
-from planqa_review.benchmark import BENCHMARK_DOC_IDS, DEFAULT_QA_DATASET, DEFAULT_SOURCE_DIR
 from planqa_review.diff_report import to_json_dict, write_report
 from planqa_review.eval_service_notify import notify_eval_service
-from planqa_review.experiment import ExperimentConfig, run_experiment, write_experiment_report
 from planqa_review.models import DEFAULT_PROFILE, PROFILES
 from planqa_review.pipeline import review_document
 from planqa_review.run_stats import build_run_stats
-from planqa_review.scoring import load_golden_rows
 from planqa_review.structures import STRUCTURES
 from planqa_schemas.rulebook import parse_rulebook
 
@@ -91,35 +88,6 @@ def cmd_review(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_experiment(args: argparse.Namespace) -> int:
-    rulebook = parse_rulebook(args.rulebook)
-    golden_rows = list(load_golden_rows(args.qa_dataset))
-    doc_ids = tuple(args.doc_ids) if args.doc_ids else BENCHMARK_DOC_IDS
-
-    config = ExperimentConfig(
-        profile=args.profile,
-        backend=args.backend,
-        screen_model=args.screen_model,
-        verify_model=args.verify_model,
-        temperature=args.temperature,
-        doc_ids=doc_ids,
-    )
-    experiment = run_experiment(config, rulebook, args.rulebook, args.source_dir, golden_rows)
-
-    out_dir = args.out or Path("outputs/experiments") / args.profile / _timestamp()
-    write_experiment_report(out_dir, experiment, rulebook)
-
-    score = experiment.summary.score.overall
-    print(
-        f"{len(experiment.documents)}개 문서, recall={score.recall}, precision={score.precision}, "
-        f"{experiment.summary.total_wall_seconds:.1f}초 — {out_dir}"
-    )
-    for doc in experiment.documents:
-        for error in doc.result.tier_errors:
-            print(f"  ⚠️ [{doc.doc_id}] {error}", file=sys.stderr)
-    return 0
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="planqa-review")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -159,33 +127,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="구조 ablation용 — 지정 시 baseline(제안5) 대신 이 구조(src/planqa_review/structures/)로 실행, --profile은 무시됨",
     )
     review_parser.set_defaults(func=cmd_review)
-
-    experiment_parser = subparsers.add_parser(
-        "experiment", help="벤치마크 문서 세트를 골든 데이터셋과 대조해 recall/precision·시간·토큰 비용을 측정"
-    )
-    experiment_parser.add_argument("--rulebook", type=Path, default=DEFAULT_RULEBOOK)
-    experiment_parser.add_argument("--source-dir", type=Path, default=DEFAULT_SOURCE_DIR)
-    experiment_parser.add_argument("--qa-dataset", type=Path, default=DEFAULT_QA_DATASET)
-    experiment_parser.add_argument(
-        "--doc-ids", nargs="+", default=None, help="생략 시 benchmark.BENCHMARK_DOC_IDS 사용"
-    )
-    experiment_parser.add_argument("--out", type=Path, default=None, help="생략 시 outputs/experiments/<profile>/<timestamp>/")
-    experiment_parser.add_argument("--backend", default=None, help="overrides PLANQA_LLM_BACKEND (gemini|ollama)")
-    experiment_parser.add_argument("--screen-model", default=None, help="1단계 스크리닝용 모델(저비용)")
-    experiment_parser.add_argument("--verify-model", default=None, help="2단계 정밀판정/컨텍스트 추출용 모델(고비용)")
-    experiment_parser.add_argument(
-        "--temperature",
-        type=float,
-        default=0.0,
-        help="샘플링 온도, 기본 0.0(ablation 재현성 위해) — 다양성 원하면 명시적으로 올릴 것",
-    )
-    experiment_parser.add_argument(
-        "--profile",
-        default=DEFAULT_PROFILE,
-        choices=sorted(PROFILES),
-        help="프롬프트/로직 전략 (src/planqa_review/models/) — 모델 실험용",
-    )
-    experiment_parser.set_defaults(func=cmd_experiment)
 
     return parser
 

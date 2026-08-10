@@ -49,11 +49,11 @@ def _usage_map_dict(usage_map: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+# The per-issue field mapping shared by `to_json_dict` (single document) and any caller
+# that needs to merge several documents' issues into one predictions file (e.g. a
+# multi-document model pilot, where eval-agent needs several docs' worth of issues at
+# once for recall/precision to mean anything).
 def issue_dicts(result: ReviewResult) -> list[dict[str, Any]]:
-    # The per-issue field mapping shared by `to_json_dict` (single document) and any caller
-    # that needs to merge several documents' issues into one predictions file (e.g. a
-    # multi-document model pilot, where eval-agent needs several docs' worth of issues at
-    # once for recall/precision to mean anything).
     return [
         {
             "issue_id": issue.issue_id or _issue_id(result.doc_id, i),

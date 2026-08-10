@@ -62,8 +62,34 @@ def test_complete_json_posts_expected_request_shape():
     assert call["model"] == "claude-sonnet-5"
     assert "temperature" not in call  # rejected outright by claude-sonnet-5 — see anthropic.py
     assert call["thinking"] == {"type": "disabled"}
-    assert call["system"] == "시스템 지시"
+    # system is always sent as a cache-breakpoint block — it's static per-caller text in
+    # this codebase, so caching it is free and pays off across every call, not just one.
+    assert call["system"] == [{"type": "text", "text": "시스템 지시", "cache_control": {"type": "ephemeral"}}]
     assert call["messages"] == [{"role": "user", "content": "사용자 프롬프트"}]
+
+
+def test_complete_json_splits_cache_prefix_into_its_own_cached_block():
+    llm, fake = _client_with_handler(lambda kwargs: _message('{"summary": "요약"}'))
+    llm.complete_json(system="s", prompt="카테고리별 룰", cache_prefix="공유되는 문서 청크 본문")
+
+    call = fake.messages.calls[0]
+    assert call["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "공유되는 문서 청크 본문", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "카테고리별 룰"},
+            ],
+        }
+    ]
+
+
+def test_complete_json_without_cache_prefix_sends_plain_string_content():
+    llm, fake = _client_with_handler(lambda kwargs: _message('{"summary": "요약"}'))
+    llm.complete_json(system="s", prompt="프롬프트만")
+
+    call = fake.messages.calls[0]
+    assert call["messages"] == [{"role": "user", "content": "프롬프트만"}]
 
 
 def test_complete_json_parses_content_and_records_usage():
@@ -133,6 +159,39 @@ def test_complete_json_reraises_non_retryable_error_immediately():
     with pytest.raises(APIStatusError):
         llm.complete_json(system="s", prompt="p")
     assert len(fake.messages.calls) == 1
+
+
+def test_complete_json_retries_on_empty_text_block_then_succeeds(monkeypatch):
+    """Seen live under concurrent category dispatch: a 200 response whose text block is
+    empty or otherwise fails `parse_json_response` even after its repair fallback. The
+    request still succeeded and was billed, so retrying is the only way to not silently
+    drop that category's results — see the comment in anthropic.py's complete_json."""
+    monkeypatch.setattr("planqa_review.llm.anthropic.time.sleep", lambda _seconds: None)
+    calls = {"count": 0}
+
+    def handler(kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return _message("")
+        return _message('{"summary": "요약"}')
+
+    llm, _ = _client_with_handler(handler)
+    result = llm.complete_json(system="s", prompt="p")
+
+    assert result == {"summary": "요약"}
+    assert calls["count"] == 2
+    assert len(llm.usage) == 2  # both attempts were real, billed API calls
+
+
+def test_complete_json_raises_after_exhausting_retries_on_persistent_empty_response(monkeypatch):
+    monkeypatch.setattr("planqa_review.llm.anthropic.time.sleep", lambda _seconds: None)
+
+    def handler(kwargs):
+        return _message("")
+
+    llm, _ = _client_with_handler(handler)
+    with pytest.raises(ValueError):
+        llm.complete_json(system="s", prompt="p")
 
 
 def test_temperature_is_sent_for_models_that_accept_it():
