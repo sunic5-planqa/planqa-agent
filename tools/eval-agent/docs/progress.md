@@ -566,3 +566,55 @@ Two more real fixes came out of actually looking at the numbers instead of trust
 - `new_rule_candidate_count` was 0 across all 292 candidates this run — worth checking
   whether the taxonomy still has room for genuine rulebook gaps now that
   `valid_but_unlabeled` exists, or whether triage now over-applies the new category.
+
+## 2026-08-10 (later still) — 4th real finding: strict recall/precision double-penalize tier mismatches
+
+Read all 7 matched pairs + 12 genuine misses from the same 20-doc report by hand (free, no
+LLM calls) to answer "should we add a metric, or can recall be raised" with evidence instead
+of guessing.
+
+### Done
+
+- **Found**: 4 of the 20-doc run's 7 matched pairs had the *correct rule_id* but the
+  *wrong Level* (tier) — `verified.fully_correct` requires both, so each of those 4 was
+  simultaneously scored as a miss for golden's category/level AND a false positive for
+  predicted's category/level, on top of not counting as a TP. Same-substance catches were
+  being penalized twice for one tier-tagging slip.
+- Added `AggregateReport.overall_relaxed` (rule_id match alone is enough — a wrong-tier
+  match no longer double-penalizes) and `AggregateReport.tier_accuracy` (of rule_id matches,
+  the fraction that also got Level right) — `aggregate()` computes both in the same pass as
+  the existing strict counts, no behavior change to `overall`/`by_category`/`by_level`.
+  Surfaced in `reporter.py`'s JSON (`overall_relaxed`, `tier_accuracy`) and markdown (a
+  second summary row + a stat line). 2 new tests.
+- Re-scored the 20-doc predictions (still the same 295-issue file, no re-run of anything):
+  **strict recall 15.8% → relaxed 36.8%**, **strict precision 42.9% → relaxed 100%**,
+  **tier_accuracy 42.9%** (3 of the 7 rule_id matches also got the tier right). This means:
+  review-agent finds the *right problem* noticeably more often than strict scoring showed,
+  but tags it at the *right hierarchy level* only about 4 times in 10 — a real, specific,
+  actionable weak spot (categorization granularity) distinct from "doesn't find the issue at
+  all", which strict recall/precision alone conflated into one low number.
+- Also read the 12 genuine (no-match-at-all) misses: 5 of 12 are Document-tier
+  relational/cross-section rules (LG-05, MI-05×1, GA-05×1, GA-01×2 — "A vs B"/"A↔B" style
+  locations) — a pattern, not noise, suggesting review-agent's Document-tier relational
+  detection specifically is the weaker spot, worth a real prompt/structure look later (not a
+  metric issue — flagged as a genuine engineering lead, not chased further this session).
+- 82/82 tests green (80 + 2).
+
+### Notes
+
+- Answered the "recall폐기?/새 지표 필요?" question this session opened with real evidence
+  gathered along the way: don't discard strict recall/precision (still the right tool for
+  golden-set-referenced accuracy), but the *tier* axis needed its own metric instead of
+  being folded into one strict pass/fail — same "additive metric, not a lowered bar"
+  principle as `valid_but_unlabeled`.
+- `BaselineComparison`/`compare_to_human_baseline` were **not** extended with the relaxed
+  view this session — still strict-only. Follow-up if a relaxed subject-vs-human comparison
+  is ever needed.
+
+### Next
+
+- The Document-tier relational-detection weak spot above is review-agent's own next lead,
+  not eval-agent's — separate session/owner call.
+- Consider whether `--judge-ensemble`-verified triage would meaningfully change
+  `valid_unlabeled_count`/`new_rule_candidate_count` now that the 4-way taxonomy exists, if
+  a low-stakes moment to spend the extra API calls comes up.
