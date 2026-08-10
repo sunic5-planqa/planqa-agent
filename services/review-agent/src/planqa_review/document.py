@@ -42,6 +42,47 @@ class DocumentTree:
         return ()
 
 
+# Coarser (smaller number) -> finer. Used to decide whether a model-claimed level is a
+# legitimate *promotion* of the chunk it was actually given (e.g. a Sentence-tier call
+# recognizing its finding really affects the whole Paragraph/Logical Unit) versus a bogus
+# demotion, which we never honor — a call scoped to a Paragraph tier has no way to know
+# anything at Sentence granularity that wasn't in the chunk it was handed anyway.
+# Coarser (smaller number) -> finer. Level.WORD has no entry on purpose here (§2 assigns it
+# no categories/input unit — see tiers.py) but it's still a real Level member a model could
+# echo back in a "level" field, so resolve_reported_level below must not do a bare [] lookup
+# on this dict without checking membership first, or an unrecognized-but-valid Level value
+# crashes instead of being ignored like every other unrecognized value.
+_LEVEL_COARSENESS: dict[Level, int] = {Level.DOCUMENT: 0, Level.LOGICAL_UNIT: 1, Level.PARAGRAPH: 2, Level.SENTENCE: 3}
+
+
+# A structure's confirm/verdict call is scoped to one tier's chunks (see tiers.py), so it
+# can only ever widen its report to a *coarser* level than the chunk it was actually given —
+# never narrow it (see module docstring above). `claimed_level_name` is whatever the model
+# put in an optional "level" field of its JSON response; anything that isn't a recognized
+# Level value with a known coarseness, or isn't strictly coarser than `chunk_level`, is
+# ignored and (chunk_level, chunk_location) is returned unchanged.
+#
+# Promoting a location string works because document.py's own paragraph/sentence
+# Chunk.location values are already built as "<logical unit label> > <sub label>" (see
+# _split_paragraphs) — trimming at the first " > " recovers the logical-unit-level label.
+# There's nothing to trim for a lone label (already document/logical-unit level, or a
+# paragraph with no sub-heading) — the caller just gets that label back unchanged, which is
+# a reasonable best-effort location for a promoted Document-level report.
+def resolve_reported_level(chunk_level: Level, chunk_location: str, claimed_level_name: object) -> tuple[Level, str]:
+    if not isinstance(claimed_level_name, str):
+        return chunk_level, chunk_location
+    try:
+        claimed_level = Level(claimed_level_name)
+    except ValueError:
+        return chunk_level, chunk_location
+    if claimed_level not in _LEVEL_COARSENESS:
+        return chunk_level, chunk_location
+    if _LEVEL_COARSENESS[claimed_level] >= _LEVEL_COARSENESS[chunk_level]:
+        return chunk_level, chunk_location
+    promoted_location = chunk_location.split(" > ", 1)[0] if " > " in chunk_location else chunk_location
+    return claimed_level, promoted_location
+
+
 def _doc_title(text: str) -> str:
     match = _H1.search(text)
     return match.group(1).strip() if match else "문서 전체"
