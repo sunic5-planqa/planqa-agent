@@ -791,3 +791,37 @@ Haiku 스크리닝/Sonnet 정밀판정으로 라이브 검증했을 때 문서 1
   이라 손 안 댐, 별도로 공유할 만한 내용.
 - 알려진 한계(문서화만, 이번엔 안 고침): AE-03 과탐지 잔존 위험, 위계 과대확장 미검증 —
   프로덕션에서 eval-service로 관찰 권장.
+
+## 2026-08-10 — bundled_screen_hybrid의 2개 pass 병렬화
+
+PR #21 머지 직후, `bundled_screen_hybrid.review_document()`가 Paragraph/Document 2개
+pass를 순차 실행하고 있던 걸 발견(category_screen.py 삭제로 지난번 병렬화 작업도 같이
+사라짐) — 사용자 요청으로 병렬화.
+
+### Done
+
+- `_run_pass`를 새로 뽑아서 Paragraph/Document 2개 pass를 `ThreadPoolExecutor`로 동시
+  실행. 팀원이 이미 만들어둔 `instrumentation.isolate_client`/`merge_usage`(cell3.py용으로
+  선제적으로 준비돼 있었으나 아직 아무 데도 안 쓰이고 있었음)를 그대로 활용.
+- **`isolate_client`에 진짜 스레드 안전성 버그 발견**: 기존 구현은 `copy.copy(llm)`만
+  쓰는데, `ScriptedLLM`(테스트 더블)엔 커스텀 `__copy__`가 없어서 얕은 복사가 `_responses`
+  iterator를 그대로 공유 — 두 pass가 같은 iterator에서 경쟁하면 GA-01처럼 Document
+  전용으로 설계된 룰의 스크리닝 응답이 Paragraph pass로 잘못 갈 수 있음. 8회 반복 실행은
+  전부 통과했지만(GIL+무지연 fake 호출이라 순서가 거의 항상 보존됨), 이건 안전 보장이
+  아니라 우연 — category_screen.py 때와 같은 함정.
+- `isolate_client(llm, *, key=None)`에 선택적 `key` 파라미터 추가 — 실제 백엔드는
+  무시(기존 `copy.copy()` 그대로), `llm.isolate(key)`가 정의돼 있으면 그걸 우선 호출.
+  `bundled_screen_hybrid._run_pass`는 `key=level`로 호출.
+- `ScriptedLLM`(conftest.py)에 `keyed_responses: dict[Any, list[Any]]` + `isolate(key)`
+  추가(예전 category_screen 전용이었던 `tier_responses`/`clone(tier=)`를 범용 dict 기반으로
+  일반화 — `TIER_ORDER` 의존성 제거, 어떤 키든 사용 가능). 6개 테스트를 `Level.PARAGRAPH`/
+  `Level.DOCUMENT` 키 기반으로 재작성.
+- 120/120 테스트 통과, `test_bundled_screen_hybrid.py` 15회 반복 실행으로 flaky 여부 확인.
+- 라이브 검증(DOC-001, Haiku 양쪽 다): 55.4초 — `by_stage` 합산 103.6초가 벽시계 55.4초로
+  압축됨, 실측 약 1.9배 단축.
+
+### Next
+
+- 여전히 category_screen 때와 마찬가지로, 확장 가능한 concurrency 인프라(isolate_client
+  + key)는 이제 review-agent 공통 자산 — 다음에 pass/tier가 3개 이상인 구조가 나오면
+  바로 재사용 가능.
