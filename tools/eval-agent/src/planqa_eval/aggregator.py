@@ -27,6 +27,16 @@ class ConfusionCounts:
 @dataclass(frozen=True, slots=True)
 class AggregateReport:
     overall: ConfusionCounts
+    # rule_id match alone counts as a "found it" here — a matched pair tagged at the wrong
+    # Level (tier) isn't double-penalized (a miss for golden's tier AND a false positive for
+    # predicted's tier, on top of already not being `overall`'s strict TP) the way `overall`
+    # scores it. Tier correctness is tracked separately via tier_accuracy instead, so a
+    # same-substance catch at the wrong hierarchy level shows up as a categorization
+    # inaccuracy, not as two unrelated misfires.
+    overall_relaxed: ConfusionCounts = field(default_factory=ConfusionCounts)
+    # Among matched pairs with the right rule_id, the fraction that also got Level right —
+    # None when there are no rule_id matches to measure it against.
+    tier_accuracy: float | None = None
     by_category: dict[str, ConfusionCounts] = field(default_factory=dict)
     by_level: dict[str, ConfusionCounts] = field(default_factory=dict)
     new_rule_candidate_count: int = 0
@@ -40,10 +50,17 @@ def aggregate(result: PipelineResult) -> AggregateReport:
     so this scales automatically as the golden dataset and rulebook grow.
 
     Counting rules:
-    - A matched pair only counts as a true positive if Rule ID *and* Level are both exactly
-      right (verifier.VerifiedMatch.fully_correct). A matched-but-misclassified pair is a
-      miss for the golden issue's own category/level *and* a false positive for whatever
-      the agent claimed instead.
+    - `overall`/`by_category`/`by_level` (strict): a matched pair only counts as a true
+      positive if Rule ID *and* Level are both exactly right
+      (verifier.VerifiedMatch.fully_correct). A matched-but-misclassified pair is a miss for
+      the golden issue's own category/level *and* a false positive for whatever the agent
+      claimed instead.
+    - `overall_relaxed`: the same matches, but Rule ID match alone is enough — a right-rule/
+      wrong-tier catch isn't double-penalized as both a miss and a phantom false positive on
+      top of missing strict's TP. `tier_accuracy` (fraction of rule_id matches that also got
+      Level right) carries the tier-correctness signal instead, so it's visible without
+      conflating "did the agent find the right problem" with "did it file it at the right
+      hierarchy level" into one number.
     - A missed golden issue only counts as a false negative if the exception-condition
       check didn't excuse it (verifier.VerifiedMiss.excused) — excused misses are dropped
       from recall entirely, not counted as either a hit or a miss.
@@ -56,6 +73,9 @@ def aggregate(result: PipelineResult) -> AggregateReport:
     """
     category_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     level_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    relaxed_counts: dict[str, int] = defaultdict(int)
+    tier_correct = 0
+    rule_id_match_count = 0
 
     for verified in result.verified_matches:
         golden_category = category_of(verified.golden.rule_id)
@@ -69,6 +89,17 @@ def aggregate(result: PipelineResult) -> AggregateReport:
             category_counts[predicted_category]["fp"] += 1
             level_counts[verified.predicted.level]["fp"] += 1
 
+        if verified.rule_id_match:
+            relaxed_counts["tp"] += 1
+            rule_id_match_count += 1
+            if verified.level_match:
+                tier_correct += 1
+        else:
+            # Wrong rule entirely (not just wrong tier) — still a miss for golden and a
+            # phantom catch for predicted under the relaxed view too.
+            relaxed_counts["fn"] += 1
+            relaxed_counts["fp"] += 1
+
     excused_miss_count = 0
     for miss in result.verified_misses:
         if miss.excused:
@@ -76,6 +107,7 @@ def aggregate(result: PipelineResult) -> AggregateReport:
             continue
         category_counts[category_of(miss.golden.rule_id)]["fn"] += 1
         level_counts[miss.golden.level]["fn"] += 1
+        relaxed_counts["fn"] += 1
 
     new_rule_candidate_count = 0
     valid_unlabeled_count = 0
@@ -84,6 +116,7 @@ def aggregate(result: PipelineResult) -> AggregateReport:
         if triage.verdict == "false_positive":
             category_counts[category_of(triage.predicted.rule_id)]["fp"] += 1
             level_counts[triage.predicted.level]["fp"] += 1
+            relaxed_counts["fp"] += 1
         elif triage.verdict == "new_rule_candidate":
             new_rule_candidate_count += 1
         elif triage.verdict == "valid_but_unlabeled":
@@ -105,8 +138,16 @@ def aggregate(result: PipelineResult) -> AggregateReport:
         false_negative=sum(c.false_negative for c in by_category.values()),
         false_positive=sum(c.false_positive for c in by_category.values()),
     )
+    overall_relaxed = ConfusionCounts(
+        true_positive=relaxed_counts["tp"],
+        false_negative=relaxed_counts["fn"],
+        false_positive=relaxed_counts["fp"],
+    )
+    tier_accuracy = tier_correct / rule_id_match_count if rule_id_match_count else None
     return AggregateReport(
         overall=overall,
+        overall_relaxed=overall_relaxed,
+        tier_accuracy=tier_accuracy,
         by_category=by_category,
         by_level=by_level,
         new_rule_candidate_count=new_rule_candidate_count,

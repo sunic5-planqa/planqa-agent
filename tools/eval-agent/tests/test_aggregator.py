@@ -51,6 +51,33 @@ def test_misclassified_match_is_fn_for_golden_category_and_fp_for_predicted_cate
     assert report.overall.true_positive == 0
 
 
+def test_right_rule_wrong_tier_counts_toward_relaxed_tp_not_strict():
+    """The exact scenario found on the 20-doc benchmark: rule_id correct, level wrong —
+    strict scoring treats this as a total miss+phantom-FP, relaxed scoring credits the
+    substance and tier_accuracy carries the "but wrong tier" signal separately."""
+    golden = _issue(rule_id="AE-01", level="Sentence")
+    predicted = _issue(rule_id="AE-01", level="Document")
+    verified = VerifiedMatch(golden=golden, predicted=predicted, rule_id_match=True, level_match=False)
+    report = aggregate(_result(verified_matches=[verified], judge_scores=[_judge(golden, predicted)]))
+
+    assert report.overall.true_positive == 0  # strict: still not fully correct
+    assert report.overall_relaxed.true_positive == 1  # relaxed: rule_id alone is enough
+    assert report.overall_relaxed.false_negative == 0
+    assert report.overall_relaxed.false_positive == 0
+    assert report.tier_accuracy == 0.0  # 0 of 1 rule_id matches also got the tier right
+
+
+def test_wrong_rule_entirely_counts_against_relaxed_too():
+    golden = _issue(rule_id="AE-01", level="Sentence")
+    predicted = _issue(rule_id="LG-01", level="Sentence")
+    verified = VerifiedMatch(golden=golden, predicted=predicted, rule_id_match=False, level_match=True)
+    report = aggregate(_result(verified_matches=[verified], judge_scores=[_judge(golden, predicted)]))
+
+    assert report.overall_relaxed.false_negative == 1
+    assert report.overall_relaxed.false_positive == 1
+    assert report.tier_accuracy is None  # no rule_id matches to measure it against
+
+
 def test_excused_miss_is_dropped_from_recall_entirely():
     golden = _issue(rule_id="AE-01")
     report = aggregate(_result(verified_misses=[VerifiedMiss(golden=golden, excused=True)]))
