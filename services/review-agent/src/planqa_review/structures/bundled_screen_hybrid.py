@@ -219,6 +219,9 @@ def _paragraph_and_document_rules(rulebook: RuleBook) -> tuple[list[RuleDef], li
     return paragraph_rules, document_rules
 
 
+# bundled_screen_hybrid — bundled_screen/bundled_screen_fewshot과 판정 방식·청킹은
+# 동일(2단계, 문단형)하지만, screen/confirm 양쪽 프롬프트에 룰 텍스트와 fewshot 예시를
+# 함께 준다.
 def review_document(
     doc_id: str,
     document_text: str,
@@ -226,9 +229,6 @@ def review_document(
     screen_llm: LLMClient,
     confirm_llm: LLMClient,
 ) -> ReviewResult:
-    """bundled_screen_hybrid — bundled_screen/bundled_screen_fewshot과 판정 방식·청킹은
-    동일(2단계, 문단형)하지만, screen/confirm 양쪽 프롬프트에 룰 텍스트와 fewshot 예시를
-    함께 준다."""
     tier_errors: list[str] = []
     events: list[CallEvent] = []
 

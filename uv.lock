@@ -652,7 +652,6 @@ dependencies = [
     { name = "anthropic" },
     { name = "google-genai" },
     { name = "httpx" },
-    { name = "openpyxl" },
     { name = "planqa-schemas" },
     { name = "python-dotenv" },
 ]
@@ -667,7 +666,6 @@ requires-dist = [
     { name = "anthropic", specifier = ">=0.40" },
     { name = "google-genai", specifier = ">=0.3" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "openpyxl", specifier = ">=3.1" },
     { name = "planqa-schemas", editable = "packages/planqa-schemas" },
     { name = "python-dotenv", specifier = ">=1.0" },
 ]

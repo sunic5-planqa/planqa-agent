@@ -22,15 +22,16 @@ class OllamaClient(LLMClient):
         self._temperature = temperature
         self.usage: list[CallStats] = []
 
-    def complete_json(self, *, system: str, prompt: str) -> Any:
+    def complete_json(self, *, system: str, prompt: str, cache_prefix: str | None = None) -> Any:
         start = time.perf_counter()
+        full_prompt = f"{cache_prefix}\n\n{prompt}" if cache_prefix else prompt
         response = httpx.post(
             f"{self._host}/api/chat",
             json={
                 "model": self.model,
                 "messages": [
                     {"role": "system", "content": system},
-                    {"role": "user", "content": prompt},
+                    {"role": "user", "content": full_prompt},
                 ],
                 "format": "json",
                 "stream": False,

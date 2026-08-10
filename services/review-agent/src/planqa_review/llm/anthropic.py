@@ -30,8 +30,8 @@ def _load_api_key(explicit: str | None) -> str:
 
 
 class AnthropicClient(LLMClient):
-    """Direct Anthropic API access (not the mindlogic gateway) — for the demo confirm stage,
-    where the team is paying for its own Claude credit rather than sharing gateway quota."""
+    # Direct Anthropic API access (not the mindlogic gateway) — for the demo confirm stage,
+    # where the team is paying for its own Claude credit rather than sharing gateway quota.
 
     def __init__(
         self,

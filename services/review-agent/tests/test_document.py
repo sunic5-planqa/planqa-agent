@@ -112,3 +112,10 @@ def test_resolve_reported_level_ignores_missing_or_invalid_claims():
     assert resolve_reported_level(Level.SENTENCE, "2. 배경", None) == (Level.SENTENCE, "2. 배경")
     assert resolve_reported_level(Level.SENTENCE, "2. 배경", "not a real level") == (Level.SENTENCE, "2. 배경")
     assert resolve_reported_level(Level.SENTENCE, "2. 배경", 42) == (Level.SENTENCE, "2. 배경")
+
+
+def test_resolve_reported_level_ignores_a_claim_with_no_coarseness_entry():
+    # Level.WORD is a real Level member (no §2 categories assigned yet, see tiers.py) but
+    # has no entry in _LEVEL_COARSENESS — must be treated the same as any other
+    # unrecognized claim (ignored) instead of crashing with a bare dict lookup.
+    assert resolve_reported_level(Level.SENTENCE, "2. 배경", "Word") == (Level.SENTENCE, "2. 배경")
