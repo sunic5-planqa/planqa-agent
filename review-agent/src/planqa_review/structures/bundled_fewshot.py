@@ -78,8 +78,7 @@ def _fewshot_block(rule: RuleDef) -> str:
     lines = [f"  {rule.rule_id} ({rule.category_label}):"]
     for example in VIOLATION_EXAMPLES.get(rule.rule_id, []):
         lines.append(f"    - VIOLATION example: {example.original_text!r} — {example.rationale}")
-    exception = EXCEPTION_EXAMPLES.get(rule.rule_id)
-    if exception is not None:
+    for exception in EXCEPTION_EXAMPLES.get(rule.rule_id, []):
         lines.append(
             f"    - EXCUSED example ({exception.exception_condition}): {exception.original_text!r} — {exception.rationale}"
         )
