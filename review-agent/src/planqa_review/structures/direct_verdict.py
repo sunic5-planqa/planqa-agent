@@ -97,9 +97,14 @@ def _direct_verdict_category(
     )
     chunk_block = "\n\n".join(f"[{i}] ({chunk.location})\n{chunk.text}" for i, chunk in enumerate(chunks))
     context_block = f"Document context:\n{global_context}\n\n" if global_context else ""
-    prompt = f"{context_block}Rules to check:\n{rule_block}\n\nChunks:\n{chunk_block}\n\nReturn the violations JSON."
+    # Every category dispatched for this tier shares the exact same context_block+chunk_block
+    # text (only `rules` differs per category) — split out as `cache_prefix` so a caching-
+    # capable backend (AnthropicClient) only bills/reprocesses it in full on the first of
+    # the concurrent category calls, not all of them.
+    cache_prefix = f"{context_block}Chunks:\n{chunk_block}"
+    prompt = f"Rules to check:\n{rule_block}\n\nReturn the violations JSON."
 
-    response = llm.complete_json(system=_DIRECT_SYSTEM, prompt=prompt)
+    response = llm.complete_json(system=_DIRECT_SYSTEM, prompt=prompt, cache_prefix=cache_prefix)
     raw_violations = response.get("violations", []) if isinstance(response, dict) else []
     rules_by_id = {rule.rule_id: rule for rule in rules}
 
@@ -174,12 +179,13 @@ def review_document(
     rulebook: RuleBook,
     screen_llm: LLMClient,
     confirm_llm: LLMClient,
-    max_workers: int = 4,
+    max_workers: int | None = None,
 ) -> ReviewResult:
     """direct_verdict — cell3와 동일하게 위계별·카테고리별 독립 콜을 병렬 실행하지만, 각
     콜이 screen 없이 곧장 최종 판정을 낸다. `screen_llm`은 안 씀(모든 콜을 `confirm_llm`
     으로) — 다른 구조들과 동일한 `ReviewFn` 시그니처를 맞추기 위해 인자만 유지.
-    `max_workers=1`을 주면 순차 실행(테스트에서 순서 결정성을 위해 사용)."""
+    `max_workers`를 안 주면(기본값) 그 위계의 카테고리 수만큼 한꺼번에 병렬 실행,
+    `max_workers=1`을 주면 순차 실행(테스트 결정성용)."""
     del screen_llm
     tier_errors: list[str] = []
     events: list[CallEvent] = []
@@ -210,7 +216,8 @@ def review_document(
         if not rules_by_category:
             continue
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        pool_workers = max_workers if max_workers is not None else len(rules_by_category)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=pool_workers) as pool:
             futures = {
                 pool.submit(
                     _review_category, chunks, rules, global_context, doc_id, level, document_text, rulebook, confirm_llm, events

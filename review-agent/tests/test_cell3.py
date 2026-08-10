@@ -17,7 +17,7 @@ class _RelationalLLM:
         self.usage: list[CallStats] = []
         self.calls: list[dict[str, str]] = []
 
-    def complete_json(self, *, system: str, prompt: str):
+    def complete_json(self, *, system: str, prompt: str, cache_prefix: str | None = None):
         self.calls.append({"system": system, "prompt": prompt})
         self.usage.append(CallStats(elapsed_seconds=0.0, prompt_tokens=None, completion_tokens=None, total_tokens=None))
         if "verdicts" not in system:
@@ -53,7 +53,7 @@ class _ContentAwareLLM:
         self.calls: list[dict[str, str]] = []
         self._flagged_rule_id = flagged_rule_id
 
-    def complete_json(self, *, system: str, prompt: str):
+    def complete_json(self, *, system: str, prompt: str, cache_prefix: str | None = None):
         self.calls.append({"system": system, "prompt": prompt})
         self.usage.append(CallStats(elapsed_seconds=0.0, prompt_tokens=None, completion_tokens=None, total_tokens=None))
         if "verdicts" not in system:  # screening call (confirm's JSON schema names "verdicts";

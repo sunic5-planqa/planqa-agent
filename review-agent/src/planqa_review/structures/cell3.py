@@ -4,7 +4,7 @@ import concurrent.futures
 from dataclasses import dataclass
 
 from planqa_review.dedupe import dedupe_issues
-from planqa_review.document import Chunk, parse_document
+from planqa_review.document import Chunk, parse_document, resolve_reported_level
 from planqa_review.instrumentation import CallEvent, isolate_client, merge_usage, record_call
 from planqa_review.llm.base import LLMClient
 from planqa_review.pipeline import ReviewResult
@@ -67,12 +67,24 @@ _CONFIRM_SYSTEM = (
     "contradicts what 2-1 said\") — also name the OTHER location involved "
     "(related_location), using the same label style as the location you were given, so the "
     "caller can draw a range frame instead of a single point; leave related_location null "
-    "for every other category, or if no specific second location can be identified.\n"
+    "for every other category, or if no specific second location can be identified. When "
+    "claiming two locations conflict, first confirm they actually assert different facts — "
+    "restating the same fact in different words or at different levels of detail is NOT a "
+    "conflict; only flag a genuine logical contradiction. If several of the candidates "
+    "above are really the same underlying problem (e.g. the same defect repeated across "
+    "multiple chunks), confirm violated=true on only ONE of them and set the rest to "
+    "violated=false — don't confirm every repeat. Each candidate was screened at one "
+    "specific chunk's granularity, but if the violation actually spans a broader unit than "
+    "that chunk (e.g. the same defect repeats across every chunk under one heading), say so "
+    "with \"level\": name the coarser level it really belongs at (\"Document\", \"Logical "
+    "Unit\", \"Paragraph\", or \"Sentence\", coarsest to finest) instead of leaving it at "
+    "the chunk's own granularity — omit it (or repeat the chunk's own level) when the "
+    "finding genuinely doesn't extend beyond the one chunk.\n"
     'Respond with JSON only: {"verdicts": [{"index": <int>, "violated": <bool>, '
     '"original_text": "<quote>", "description": "<what\'s wrong>", "rationale": '
     '"<why it violates the rule>", "fix_direction": "<suggested revision>", "excused": '
-    '<bool>, "excuse_reason": "<string or null>", "related_location": "<string or null>"}, '
-    '...]}'
+    '<bool>, "excuse_reason": "<string or null>", "related_location": "<string or null>", '
+    '"level": "<Document|Logical Unit|Paragraph|Sentence, or null>"}, ...]}'
 )
 
 
@@ -88,9 +100,14 @@ def _screen_category(chunks: list[Chunk], rules: list[RuleDef], global_context: 
     rule_block = "\n".join(f"{rule.rule_id}: {rule.text}" for rule in rules)
     chunk_block = "\n\n".join(f"[{i}] ({chunk.location})\n{chunk.text}" for i, chunk in enumerate(chunks))
     context_block = f"Document context:\n{global_context}\n\n" if global_context else ""
-    prompt = f"{context_block}Rules to check:\n{rule_block}\n\nChunks:\n{chunk_block}\n\nReturn the candidates JSON."
+    # Every category dispatched for this tier shares the exact same context_block+chunk_block
+    # text (only `rules` differs per category) — split out as `cache_prefix` so a caching-
+    # capable backend (AnthropicClient) only bills/reprocesses it in full on the first of
+    # the concurrent category calls, not all of them.
+    cache_prefix = f"{context_block}Chunks:\n{chunk_block}"
+    prompt = f"Rules to check:\n{rule_block}\n\nReturn the candidates JSON."
 
-    response = llm.complete_json(system=_SCREEN_SYSTEM, prompt=prompt)
+    response = llm.complete_json(system=_SCREEN_SYSTEM, prompt=prompt, cache_prefix=cache_prefix)
     raw = response.get("candidates", []) if isinstance(response, dict) else []
     valid_rule_ids = {rule.rule_id for rule in rules}
 
@@ -157,12 +174,13 @@ def _confirm_category(
         if rules_by_id[candidate.rule_id].category in _RELATIONAL_CATEGORIES:
             raw_related = values.get("related_location")
             related_location = str(raw_related).strip() or None if raw_related else None
+        reported_level, reported_location = resolve_reported_level(level, chunk.location, values.get("level"))
         issues.append(
             Issue(
                 doc_id=doc_id,
-                level=level.value,
+                level=reported_level.value,
                 rule_id=candidate.rule_id,
-                location=chunk.location,
+                location=reported_location,
                 description=str(values.get("description") or "").strip(),
                 source="review_agent",
                 original_text=original_text,
@@ -230,9 +248,10 @@ def review_document(
     rulebook: RuleBook,
     screen_llm: LLMClient,
     confirm_llm: LLMClient,
-    max_workers: int = 4,
+    max_workers: int | None = None,
 ) -> ReviewResult:
     """셀3 — 위계별로, 배정된 카테고리마다 독립적인 screen→confirm pass를 병렬 실행한다.
+    `max_workers`를 안 주면(기본값) 그 위계의 카테고리 수만큼 한꺼번에 병렬 실행,
     `max_workers=1`을 주면 순차 실행(테스트에서 `ScriptedLLM`의 순서 결정성을 위해 사용)."""
     tier_errors: list[str] = []
     events: list[CallEvent] = []
@@ -263,7 +282,8 @@ def review_document(
         if not rules_by_category:
             continue
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        pool_workers = max_workers if max_workers is not None else len(rules_by_category)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=pool_workers) as pool:
             futures = {
                 pool.submit(
                     _review_category, level, chunks, rules, global_context, doc_id, document_text, rulebook, screen_llm, confirm_llm, events
