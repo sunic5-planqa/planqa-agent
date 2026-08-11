@@ -1494,3 +1494,31 @@ Sonnet으로 돌리기 전에, 콜분리 계열(`paragraph_verdict`/`category_fe
 
 - 실행순서 6(발견3: quoted_text/original_text가 실제 chunk 부분문자열인지 검증+보정)로
   계속.
+
+## 2026-08-12 — 실행순서 6·7: 발견3, 발견5+6 구현
+
+### Done
+
+- **실행순서 6 (발견3)**: `_resolve_quoted_span()` 신규 — 정확 일치 → 공백/줄바꿈 정규화
+  재시도(원문 인덱스 매핑으로 원래 서식 그대로 복원) → 실패 시 문장 단위 분할 +
+  `fewshot_retrieval.py`의 문자 바이그램 Jaccard 재사용해 가장 가까운 문장으로 대체.
+  `_screen_pass`의 `quoted_text`, `_confirm_pass`의 `original_text` 양쪽에 적용 — 판정은
+  유지하고 좌표(인용 span)만 보정. 헤더 라벨을 인용문으로 반환하는 mock fixture로 실제
+  본문 문장으로 교정되는지 확인하는 테스트 포함, 263/263 통과. (`80d5950`)
+- **실행순서 7 (발견5+6)**: `_DUAL_LOCATION_CATEGORIES = _RELATIONAL_CATEGORIES | {"RD"}`
+  신설(RD는 dispatch tier는 그대로 Paragraph에 두고, related_location/related_original_text
+  필드만 채워지도록 confirm 프롬프트+파싱 게이트만 확장 — "actively search 문서 전체" 지시는
+  GA/LG/LF에만 유지, RD confirm은 실제로 문서 전체를 안 보므로). 발견6은
+  `_widen_mi_finding()`으로 구현 — Notion Ver2 규칙표(단어→문장 좁힘, 문장→소주제 전체
+  넓힘, 소주제/대주제→인접 소주제/대주제까지 넓힘, 문서 경계에서는 한쪽만) 그대로,
+  `document.py`의 `parse_document()` 결과(paragraphs/logical_units 순서)를 재사용해 인접
+  청크를 찾음. dedupe → MI/AE 재검증 → MI 프레이밍 확장 순으로 `review_document()` 마지막에
+  연결. 4가지 케이스(단어/문장/소주제/대주제, 문서 끝 one-sided 포함) 전부 fixture 테스트,
+  RD 관련 위치 필드 테스트 포함 — 269/269 통과. (`71c91fe`)
+  **주의**: RD의 두 번째 위치는 이제 필드상 채워지지만, 프론트(`issueOverlay.ts`)가 아직
+  두 번째 박스를 그리지 않아 화면엔 반영 안 됨(계획에 이미 명시된 알려진 한계) — MI 쪽은
+  프론트 변경 없이도 바로 반영됨.
+
+### Next
+
+- 실행순서 8(발견7: TC 용어 목록 추출)로 계속.
