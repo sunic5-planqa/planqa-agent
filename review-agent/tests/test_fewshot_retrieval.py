@@ -41,6 +41,7 @@ def test_top_k_falls_back_to_curated_order_when_nothing_overlaps():
 
 def test_top_k_uses_the_real_bank_by_default():
     # Default `candidates=None` should read from fewshot_bank.ALL_VIOLATION_CANDIDATES —
-    # AE-03 has exactly 1 real candidate there (see test_fewshot_bank.py).
-    result = top_k_examples("아무 문장", "AE-03", k=2)
+    # TM-01 has exactly 1 real candidate there under the 2026-08-12 widened leakage scope
+    # (see test_fewshot_bank.py; AE-03 has 0 under that same scope, so it can't be used here).
+    result = top_k_examples("아무 문장", "TM-01", k=2)
     assert len(result) == 1
