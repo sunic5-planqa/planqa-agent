@@ -1469,3 +1469,28 @@ Sonnet으로 돌리기 전에, 콜분리 계열(`paragraph_verdict`/`category_fe
 ### Next
 
 - 실행순서 4(발견1+4 `_CATEGORY_BOUNDARY_NOTES` 포팅)로 계속.
+
+## 2026-08-12 — 실행순서 4·5: 발견1+4, 발견2 구현
+
+### Done
+
+- **실행순서 4 (발견1+4)**: `_CATEGORY_BOUNDARY_NOTES`를 `bundled_screen_hybrid.py`에
+  추가 — GA↔TC, TC↔MI 두 단락은 PR #27 원문 그대로 포팅, LF↔GA/LG 세 번째 단락(발견4,
+  쿠폰 개수 불일치처럼 사실이 다르면 LF가 아니라 GA/LG)은 이번에 신규 작성. 두 시스템
+  프롬프트(screen+confirm) 모두에 삽입. 프롬프트 텍스트만 바꾸는 변경이라 팀도 라이브
+  검증 없이 넘어갔던 것과 동일하게, 실제 분류 개선 효과는 실행순서 12(1문서 실 호출)에서
+  관찰 예정 — 지금은 프롬프트에 텍스트가 실제로 들어가는지만 테스트로 확인. 249/249
+  통과. (`5f8ae9a`)
+- **실행순서 5 (발견2)**: `_verify_mi_finding`/`_verify_ae_finding` + `_FALSE_POSITIVE_
+  VERIFIERS` 딕셔너리를 `bundled_screen_hybrid.py`에 신규 구현(planqa-agent PR #28/#55
+  패턴 포팅 — 백엔드는 벤더링 정책상 qa_jobs.py에 우회로 넣었지만, 여긴 소스를 직접
+  소유하므로 `review_document()`의 dedupe 이후 마지막 단계로 정식 구현). MI/AE 이슈마다
+  문서 전체를 다시 주고 재확인, LLM 에러/malformed 응답 시엔 원래 판정 유지(fail-safe).
+  `record_call`로 감싸서 run_stats/비용 추적에도 반영되게 함(stage="verify_fp"). 백엔드
+  테스트 패턴 그대로 포팅(유지/드롭/에러시유지/malformed시유지 ×2카테고리 + 통합 1개) —
+  258/258 통과. (`10e9a90`)
+
+### Next
+
+- 실행순서 6(발견3: quoted_text/original_text가 실제 chunk 부분문자열인지 검증+보정)로
+  계속.
