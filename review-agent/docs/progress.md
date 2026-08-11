@@ -1399,3 +1399,39 @@ Sonnet으로 돌리기 전에, 콜분리 계열(`paragraph_verdict`/`category_fe
 
 - (v1과 동일) `bundled_screen_hybrid` 5문서 전체 재실행, DOC-012/DOC-003 미검출 항목
   별도 원인 분석, eval-agent 문서 스코핑 로직 팀 공유 — 전부 이번 세션 범위 밖으로 남김.
+
+## 2026-08-12 — bundled_screen_hybrid 20문서 재검증 + 정확도 개선 계획 확정
+
+### Done
+
+- 데모2 배포 후 GitHub 이슈/PR과 사용자가 직접 전달한 실사용자 피드백 13개를 조사해서
+  정확도 개선 항목 8개(발견1–8)로 정리 — 카테고리 오분류(GA↔TC, TC↔MI, LF의 사실모순
+  흡수), MI/AE 과탐지, 위치/하이라이트가 소제목에 잡히는 코드 레벨 버그(quoted_text가
+  실제 chunk 부분문자열인지 검증 안 함), TC 재현율(서술형 요약이 용어집이 아님),
+  참조-예외 정규식이 프로즈 인용을 못 잡는 버그(PR #32, `bundled_screen_hybrid`의
+  `_confirm_pass`가 직접 호출하므로 실제 오탐 원인).
+- `git fetch origin`으로 팀 최신 PR 확인(이 저장소가 `sunic5-planqa/planqa-agent`의
+  로컬 클론): PR #30(`related_original_text` 필드, 머지됨) 포팅 필요, PR #32(참조-예외
+  정규식 버그, 열려있음) 포팅 필요, PR #33(`feature/review-agent`를 `expr/`로 이전
+  제안, 열려있음) 머지는 최종 승인 필요.
+- 사용자가 공유한 팀 프레이밍 규칙 Notion 문서 2건(Ver1/Ver2)을 실제 백엔드/프론트
+  코드(`sunic5-planqa/planqa`)와 대조: 백엔드는 이미 규칙대로 구현돼 있으나 프론트
+  (`issueOverlay.ts`)는 아직 object 방식으로만 그려서 range/insert_range가 시각적으로
+  반영 안 됨 — MI 쪽 수정은 review-agent만 고쳐도 바로 효과 있지만 RD 쪽은 프론트 갱신
+  별도 필요.
+- 비용 재산정: 실제 서비스 관측치($0.3–0.4/문서, bundled_screen_hybrid 기준)로 역산해
+  단가 $40/M 토큰 확정, 20문서 재검증 약 $7. Batch API(50% 할인) 포함 여부를 검토 —
+  처음엔 엔지니어링 비용 대비 이득이 적어 제외했다가, 사용자가 "코드는 내가(어시스턴트)
+  하는 거니 트레이드오프 논리가 안 맞다"고 확인해 포함으로 결정. 실제 배치 소요시간을
+  조사해 5시간 예산(동적 타임아웃+취소+동기폴백)으로 설계, $7 비용 상한을 매 단계
+  제출 전 사전 추정으로 강제하는 가드도 계획에 포함.
+- 계획을 `~/.claude/plans/replicated-jingling-pudding.md`에서 다듬어 사용자가
+  ExitPlanMode로 최종 승인. `review-agent/docs/plan_2026-08-12_bundled_screen_hybrid_
+  revalidation.md`(이 저장소 사본)와 `handoff_2026-08-12_bundled_screen_hybrid_
+  revalidation_plan.md`(최종 갱신)로 커밋.
+
+### Next
+
+- 실행순서 2번(PR #30 포팅)부터 시작 — 상세 내용은 `plan_2026-08-12_bundled_screen_
+  hybrid_revalidation.md` 참고. 사용자가 자리를 비운 동안 자율 실행(계획 최상단
+  "자율 실행 범위" 참고) — push/PR 머지/PR #33 병합만 마지막에 승인받음.
