@@ -86,11 +86,14 @@ _CONFIRM_HYBRID_SYSTEM = (
     "above (even ones flagged under different rule_ids) are really the same underlying "
     "problem, confirm violated=true on only ONE of them and set the rest to violated=false "
     "— don't confirm every repeat. Each candidate was screened at one specific chunk's "
-    "granularity, but if the violation actually spans a broader unit than that chunk, say "
-    "so with \"level\": name the coarser level it really belongs at (\"Document\", "
-    "\"Logical Unit\", \"Paragraph\", or \"Sentence\", coarsest to finest) instead of "
-    "leaving it at the chunk's own granularity — omit it (or repeat the chunk's own level) "
-    "when the finding genuinely doesn't extend beyond the one chunk.\n"
+    "granularity, but the actual violation may not match that granularity exactly — say so "
+    "with \"level\": if it spans a broader unit than the chunk, name the coarser level it "
+    "really belongs at (\"Document\", \"Logical Unit\", \"Paragraph\", or \"Sentence\", "
+    "coarsest to finest); if instead the problem is really confined to just one specific "
+    "sentence within a larger chunk you were given, name \"Sentence\" — original_text "
+    "should already be that exact sentence, so this is just labeling the scope you already "
+    "quoted. Omit \"level\" (or repeat the chunk's own level) only when the finding's true "
+    "scope genuinely matches the chunk you were given, neither broader nor narrower.\n"
     'Respond with JSON only: {"verdicts": [{"index": <int>, "violated": <bool>, '
     '"original_text": "<quote>", "description": "<what\'s wrong>", "rationale": '
     '"<why it violates the rule>", "fix_direction": "<suggested revision>", "excused": '

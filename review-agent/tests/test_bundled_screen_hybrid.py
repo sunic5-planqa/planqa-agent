@@ -92,6 +92,47 @@ def test_review_document_two_passes_end_to_end(rulebook_path):
     assert issue.level == "Paragraph"
 
 
+def test_review_document_honors_a_sentence_level_demotion_within_a_paragraph_chunk(rulebook_path):
+    # The AE-03/DOC-003 golden case (level=Sentence, location kept at the paragraph's own
+    # label) that resolve_reported_level's old promotion-only rule could never produce —
+    # confirm's "level": "Sentence" on a Paragraph-tier chunk must now come through as-is.
+    rulebook = parse_rulebook(rulebook_path)
+    confirm_llm = ScriptedLLM(
+        [{"summary": ""}],
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "verdicts": [
+                        {
+                            "index": 0,
+                            "violated": True,
+                            "original_text": "간단한 목적 설명입니다.",
+                            "description": "d",
+                            "fix_direction": "f",
+                            "excused": False,
+                            "level": "Sentence",
+                        }
+                    ]
+                }
+            ],
+        },
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {"candidates": [{"chunk_index": 0, "rule_id": "MI-01", "quoted_text": "간단한 목적 설명입니다.", "reason": "r"}]}
+            ],
+            Level.DOCUMENT: [_EMPTY_CANDIDATES],
+        }
+    )
+
+    result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
+
+    [issue] = result.issues
+    assert issue.level == "Sentence"
+    assert issue.location == "1. 목적"
+
+
 def test_review_document_respects_excused_flag(rulebook_path):
     rulebook = parse_rulebook(rulebook_path)
     confirm_llm = ScriptedLLM(

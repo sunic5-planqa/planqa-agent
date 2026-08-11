@@ -96,10 +96,21 @@ def test_resolve_reported_level_keeps_a_lone_label_unchanged_when_promoted():
     assert location == "2. 배경"
 
 
-def test_resolve_reported_level_ignores_a_narrower_claim():
+def test_resolve_reported_level_accepts_a_demotion_to_a_finer_claimed_level():
+    # A Paragraph-tier call narrowing to "just this one sentence within the chunk I was
+    # shown" is backed by original_text being a real quote from that chunk — unlike
+    # promotion (a claim about something outside the chunk), this needs no independent
+    # visibility to trust. Location string is left as-is: a Sentence chunk under this
+    # paragraph would already carry the same label (see _split_sentences).
     level, location = resolve_reported_level(Level.PARAGRAPH, "2. 배경 > 2-1. 문제 정의", "Sentence")
-    assert level == Level.PARAGRAPH
+    assert level == Level.SENTENCE
     assert location == "2. 배경 > 2-1. 문제 정의"
+
+
+def test_resolve_reported_level_accepts_a_two_tier_demotion():
+    level, location = resolve_reported_level(Level.DOCUMENT, "문서 전체", "Sentence")
+    assert level == Level.SENTENCE
+    assert location == "문서 전체"
 
 
 def test_resolve_reported_level_ignores_an_equal_claim():
