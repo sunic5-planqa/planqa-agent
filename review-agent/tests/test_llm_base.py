@@ -59,3 +59,33 @@ def test_parse_json_response_repairs_trailing_comma():
 def test_parse_json_response_still_raises_on_irreparable_json():
     with pytest.raises(ValueError):
         parse_json_response("{not json at all")
+
+
+def test_parse_json_response_does_not_turn_a_quoted_windows_path_into_a_real_newline():
+    # A prior version trusted \n/\t/\r/\b/\f as always-valid escapes regardless of context,
+    # so a quoted Windows path like "C:\Users\name" (containing \n as two literal chars,
+    # not an intended newline escape) silently became "C:\Users" + a real newline + "ame"
+    # once repair was triggered by an unrelated invalid escape elsewhere in the same call.
+    raw = '{"original_text": "숫자는 \\d+ 패턴, 경로 C:\\Users\\name"}'
+    result = parse_json_response(raw)
+    assert "\n" not in result["original_text"]
+    assert result["original_text"] == "숫자는 \\d+ 패턴, 경로 C:\\Users\\name"
+
+
+def test_parse_json_response_does_not_break_a_valid_escaped_backslash_before_u():
+    # An escaped backslash immediately followed by a literal "u" (e.g. quoting a path like
+    # "\\uploads") must not be mistaken for the start of a broken \uXXXX escape once repair
+    # is triggered by an unrelated invalid escape elsewhere in the same payload.
+    raw = '{"a": "some \\p invalid", "b": "\\\\uploads folder"}'
+    result = parse_json_response(raw)
+    assert result["b"] == "\\uploads folder"
+
+
+def test_parse_json_response_does_not_strip_a_comma_inside_quoted_content():
+    # _TRAILING_COMMA-style repair must only drop a comma that's real JSON structure (right
+    # before a closing brace/bracket, outside any string) — not a comma that's part of a
+    # quoted value's actual content, even if it happens to be followed by "}"-like text.
+    raw = '{"a": 1, "quoted": "if (x) { y, }", "b": 2,}'
+    result = parse_json_response(raw)
+    assert result["quoted"] == "if (x) { y, }"
+    assert result == {"a": 1, "quoted": "if (x) { y, }", "b": 2}
