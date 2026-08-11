@@ -154,7 +154,15 @@ def run_resumable(
                     errors.append(f"{doc_id}: {error}")
                     continue
                 documents.append(doc_run)
-                cost_guard.record_actual_tokens((doc_run.stats.screen.total_tokens or 0) + (doc_run.stats.confirm.total_tokens or 0))
+                # Only confirm-role tokens are billed against the $7 cap — bundled_screen_
+                # hybrid's global_context extraction also runs on confirm_llm (Anthropic), so
+                # stats.confirm already covers "confirm+context" exactly like the $0.3-0.4/
+                # doc estimate this cap is based on (see docs/progress.md). screen_llm is
+                # Gemini flash-lite on free-tier keys — genuinely $0 against this budget, not
+                # merely cheap; folding it in at the Anthropic rate would 5x-overcount real
+                # spend (caught live during the 2026-08-12 1-doc smoke test: $1.11 estimated
+                # vs ~$0.23 actual).
+                cost_guard.record_actual_tokens(doc_run.stats.confirm.total_tokens or 0)
 
     order = {doc_id: i for i, doc_id in enumerate(doc_ids)}
     documents_sorted = tuple(sorted(documents, key=lambda doc: order[doc.doc_id]))
