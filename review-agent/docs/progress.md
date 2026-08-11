@@ -1596,3 +1596,44 @@ Sonnet으로 돌리기 전에, 콜분리 계열(`paragraph_verdict`/`category_fe
 
 - 실행순서 11(resumable 실행 + Batch API 인프라 + $7 가드 + 3시간 동적 타임아웃)로
   계속.
+
+## 2026-08-12 — 실행순서 11: 실행 인프라, Batch API는 부분 구현(설계 공백 발견)
+
+### Done
+
+- **`cost_guard.py`**: `CostGuard`(누적 사용량 추적) + `check_or_raise` — 매 단계 제출
+  직전에 "지금까지 실사용 + 이번 단계 예상"을 계산해서 $7 초과 시 그 단계를 제출하지
+  않고 `CostCapExceeded`를 던짐(사전 추정 게이트, 계획에 명시된 그대로).
+- **`resumable_run.py`**: `run_resumable()` — doc_id별 `review.json` 존재 여부로
+  resumable 처리(이미 있으면 API 호출 없이 그 파일에서 복원), 나머지는
+  `ThreadPoolExecutor`로 병렬 처리, 실행 전 남은 문서 수 × 문서당 예상비용을 `CostGuard`
+  에 사전 체크, 완료된 문서의 실사용 토큰을 가드에 실시간 반영. `deadline`(옵션)을 넘기면
+  그 시점 이후로는 새 문서를 추가로 제출하지 않음(이미 제출된 건 정상 완료, 못 넣은
+  문서는 review.json이 없으니 다음 실행에서 자동으로 재시도 — 3시간 데드라인을 "하드
+  실패" 대신 "된 만큼 resumable하게"로 처리).
+- **`llm/anthropic.py`**: `build_batch_request`/`submit_batch`/`poll_batch`/`cancel_batch`/
+  `fetch_batch_results` — Anthropic Batch API(50% 할인) 프리미티브. `complete_json`이
+  이미 하던 system/cache_prefix 메시지 구성 로직을 `_system_blocks`/`_message_content`로
+  뽑아내 배치 요청 빌더와 공유(동작 변경 없음, 기존 15개 테스트 그대로 통과).
+- **Batch API 3단계 통합은 이번에 안 함 — 실행 중 발견한 설계 공백**: 계획대로 하려면
+  "(a) global_context 추출 + screen을 한 배치, (b) confirm을 두 번째 배치"가 되는데,
+  **global_context의 결과가 screen 프롬프트에 그대로 들어간다**(`_screen_pass`의
+  `context_block`) — 배치 안의 요청들은 서로 독립적이라 같은 배치 안에서 한 요청이 다른
+  요청의 출력에 의존할 수 없음. 즉 (a)를 정말 한 배치로 하려면 screen이 global_context
+  없이 돌아가야 하거나(품질 저하), 4단계 배치(context→screen→confirm→재검증)로 늘려야
+  함 — 계획에 없던 진짜 블로커. 사용자가 잠든 상태라 판단을 미룰 수 없어서, 가장
+  보수적인 선택으로 **이번 실행순서 13(전체 실행)은 Batch API 없이 `run_resumable`의
+  동기+병렬 경로로 진행**하기로 결정 — 절감 최대치가 ~$3.5(할인율 50% × 원래 $7 추정치)
+  뿐이라 리스크(배치가 막히면 3시간 창을 그냥 날릴 위험) 대비 이득이 작다고 판단. Batch
+  API 프리미티브 자체는 테스트까지 완료된 채로 남겨둠 — 다음에 4단계 설계로 다시
+  시도하고 싶으면 바로 쓸 수 있음.
+- 테스트: `cost_guard.py` 8개, `resumable_run.py` 7개(스킵/재계산안함/비용가드발동/에러
+  격리/데드라인/실사용량반영), `llm/anthropic.py` 배치 프리미티브 11개 — 300/300 전체
+  통과. (`6b538ec`)
+
+### Next
+
+- 실행순서 12(최소 비용 검증 — mocked 테스트는 이미 끝, 이제 1문서 실 API 호출로 발견
+  1–8의 실제 콘텐츠 개선 효과 확인)로 계속. 이 1문서 결과는 버리지 않고 실행순서 13의
+  첫 문서로 재사용(`run_resumable`이 이미 있는 `review.json`을 스킵하는 방식으로 자동
+  처리됨).
