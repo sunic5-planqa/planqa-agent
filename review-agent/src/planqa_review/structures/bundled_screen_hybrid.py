@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from planqa_review.pipeline import ReviewResult
 from planqa_review.rulebook import RuleBook, RuleDef
 from planqa_review.schema import Issue, Level
 from planqa_review.structures.fewshot_bank import EXCEPTION_EXAMPLES, VIOLATION_EXAMPLES
+from planqa_review.structures.fewshot_retrieval import _char_bigrams, _jaccard
 from planqa_review.tiers import ABSENCE_CHECK_RULE_IDS
 from planqa_review.verifier import is_reference_excused_by_rule
 
@@ -239,6 +241,66 @@ _CONFIRM_HYBRID_SYSTEM = (
 )
 
 
+# document.py's chunk-splitting drops heading lines from chunk.text (they only end up in
+# chunk.location, not the body) — but the prompt's chunk_block shows both together
+# (f"[{i}] ({chunk.location})\n{chunk.text}"), so nothing ever checked that the model's
+# quoted_text/original_text is actually IN the body rather than a lifted copy of the
+# location label. That's the root cause of highlights landing on section headings instead
+# of the actual evidence sentence (real user report, 2026-08-12) — this resolves any quoted
+# span back onto a genuine substring of chunk.text before it ever becomes an Issue.
+def _resolve_quoted_span(quoted: str, chunk_text: str) -> str:
+    quoted = quoted.strip()
+    if not quoted or quoted in chunk_text:
+        return quoted
+    normalized_chunk, index_map = _normalize_whitespace_with_map(chunk_text)
+    normalized_quoted = " ".join(quoted.split())
+    if normalized_quoted:
+        pos = normalized_chunk.find(normalized_quoted)
+        if pos != -1:
+            start, end = index_map[pos], index_map[pos + len(normalized_quoted) - 1] + 1
+            return chunk_text[start:end]
+    return _nearest_substring(quoted, chunk_text)
+
+
+def _normalize_whitespace_with_map(text: str) -> tuple[str, list[int]]:
+    """Collapses each whitespace run to a single space, returning (normalized, index_map)
+    where index_map[i] is text's original index for normalized[i] — lets a match found in
+    the normalized string (whitespace/newline differences only) be sliced back out of the
+    original text verbatim, instead of returning the whitespace-mangled normalized form."""
+    chars: list[str] = []
+    index_map: list[int] = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i].isspace():
+            chars.append(" ")
+            index_map.append(i)
+            while i < n and text[i].isspace():
+                i += 1
+        else:
+            chars.append(text[i])
+            index_map.append(i)
+            i += 1
+    return "".join(chars), index_map
+
+
+def _sentence_spans(text: str) -> list[str]:
+    spans = [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", text) if s.strip()]
+    return spans if spans else ([text.strip()] if text.strip() else [])
+
+
+# Character-bigram Jaccard, reused from fewshot_retrieval.py's dynamic-fewshot ranking —
+# same reasoning applies here (Korean doesn't tokenize on whitespace, so word n-grams don't
+# work, and this is a best-effort fallback, not a claim of finding THE correct span: a
+# quote that was never really in this chunk (e.g. a lifted heading label) has no correct
+# answer, only a closest one).
+def _nearest_substring(quoted: str, chunk_text: str) -> str:
+    spans = _sentence_spans(chunk_text)
+    if not spans:
+        return chunk_text.strip()
+    quoted_bigrams = _char_bigrams(quoted)
+    return max(spans, key=lambda span: _jaccard(quoted_bigrams, _char_bigrams(span)))
+
+
 def _hybrid_block(rule: RuleDef) -> str:
     lines = [f"  {rule.rule_id} ({rule.category_label}): {rule.text}", f"    exception condition: {rule.exception_text or '없음'}"]
     for example in VIOLATION_EXAMPLES.get(rule.rule_id, []):
@@ -280,7 +342,7 @@ def _screen_pass(chunks: list[Chunk], rules: list[RuleDef], global_context: str,
             _Candidate(
                 chunk_index=chunk_index,
                 rule_id=rule_id,
-                quoted_text=str(item.get("quoted_text", "")).strip(),
+                quoted_text=_resolve_quoted_span(str(item.get("quoted_text", "")), chunks[chunk_index].text),
                 reason=str(item.get("reason", "")).strip(),
             )
         )
@@ -320,8 +382,8 @@ def _confirm_pass(
         values = by_index.get(i)
         if values is None or not values.get("violated"):
             continue
-        original_text = str(values.get("original_text") or candidate.quoted_text).strip()
         chunk = chunks[candidate.chunk_index]
+        original_text = _resolve_quoted_span(str(values.get("original_text") or candidate.quoted_text), chunk.text)
         excused = bool(values.get("excused")) or is_reference_excused_by_rule(
             candidate.rule_id, rulebook, original_text, doc_id, level, chunk.location, source_text
         )

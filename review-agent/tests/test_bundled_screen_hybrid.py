@@ -6,7 +6,12 @@ from conftest import ScriptedLLM
 
 from planqa_review.rulebook import parse_rulebook
 from planqa_review.schema import Issue, Level
-from planqa_review.structures.bundled_screen_hybrid import _verify_ae_finding, _verify_mi_finding, review_document
+from planqa_review.structures.bundled_screen_hybrid import (
+    _resolve_quoted_span,
+    _verify_ae_finding,
+    _verify_mi_finding,
+    review_document,
+)
 
 _DOC = "# 샘플 PRD\n\n## 1. 목적\n\n간단한 목적 설명입니다.\n\n## 2. 배경\n\n두번째 문단입니다.\n"
 
@@ -424,6 +429,67 @@ def test_screen_and_confirm_prompts_include_category_boundary_notes(rulebook_pat
         assert "GA (상위 목표와 세부 내용의 정합성)" in system
         assert "TC (용어 및 단어의 일관성)" in system
         assert "LF (논리 흐름, flow) is purely about" in system
+
+
+def test_resolve_quoted_span_returns_exact_match_unchanged():
+    assert _resolve_quoted_span("간단한 목적 설명입니다.", "간단한 목적 설명입니다.") == "간단한 목적 설명입니다."
+
+
+def test_resolve_quoted_span_recovers_the_original_formatting_across_whitespace_differences():
+    # confirm re-typed the quote with a collapsed space instead of the original newline —
+    # still the same content, so the corrected value should come back as the chunk's own
+    # verbatim substring (newline included), not the model's re-typed version.
+    chunk_text = "첫 줄입니다.\n둘째 줄입니다."
+    assert _resolve_quoted_span("첫 줄입니다. 둘째 줄입니다.", chunk_text) == chunk_text
+
+
+def test_resolve_quoted_span_falls_back_to_nearest_sentence_when_quote_is_a_heading_label():
+    # The actual root cause this fixes (2026-08-12): a chunk's location label ("2. 성공지표")
+    # sat right next to its body text in the prompt, and nothing ever verified the model
+    # quoted the body instead of just copying the label back — real user reports of
+    # highlights landing on section headings traced to exactly this.
+    chunk_text = "간단한 목적 설명입니다."
+    assert _resolve_quoted_span("2. 성공지표", chunk_text) == "간단한 목적 설명입니다."
+
+
+def test_resolve_quoted_span_handles_empty_chunk_text():
+    assert _resolve_quoted_span("아무 말", "") == ""
+
+
+def test_review_document_corrects_original_text_when_confirm_quotes_the_heading_label(rulebook_path):
+    rulebook = parse_rulebook(rulebook_path)
+    confirm_llm = ScriptedLLM(
+        [{"summary": ""}],
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "verdicts": [
+                        {
+                            "index": 0,
+                            "violated": True,
+                            "original_text": "1. 목적",  # the chunk's own location label, not its body
+                            "description": "d",
+                            "fix_direction": "f",
+                            "excused": False,
+                        }
+                    ]
+                }
+            ],
+        },
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {"candidates": [{"chunk_index": 0, "rule_id": "MI-01", "quoted_text": "1. 목적", "reason": "r"}]}
+            ],
+            Level.DOCUMENT: [_EMPTY_CANDIDATES],
+        }
+    )
+
+    result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
+
+    [issue] = result.issues
+    assert issue.original_text == "간단한 목적 설명입니다."
 
 
 def test_review_document_drops_mi_false_positive_but_keeps_other_issues(rulebook_path):
