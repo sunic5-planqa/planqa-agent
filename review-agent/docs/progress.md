@@ -1276,3 +1276,33 @@ Sonnet으로 돌리기 전에, 콜분리 계열(`paragraph_verdict`/`category_fe
   `docs/experiments/results_2026-08-10_final_summary.md`(단, hybrid_subaxis 라운드는
   거기 반영 안 돼있으니 다음에 갱신 여지 있음).
 - 이번 세션도 전부 uncommitted 상태 — 커밋 여부는 사용자 확인 필요(요청 없이 커밋 안 함).
+
+
+## 2026-08-11 — 데모2 PR 병합 후 발견된 버그 포팅 + eval-agent 결정론적 채점 계획
+
+### Done
+
+- PR #21(`sync/review-agent-demo-2` → `dev`) 병합됨(kayo2e). 리뷰 중 실제 버그 발견/
+  수정: `Level.WORD` KeyError, JSON 복구의 문자열 컨텍스트 버그, `OllamaClient` 인터페이스
+  불일치, `GeminiClient` 라운드로빈 키가 `isolate_client` 하에서 공유 안 되는 버그,
+  `isolate_client()` 호출이 try 밖에 있던 문제(이후 `bundled_screen_hybrid` 2-pass
+  병렬화 PR #23/#24에서 발견/수정). 동일 원인 코드가 `feature/review-agent`에도 있어서
+  전부 포팅 — 커밋 4개(`fa5f668`/`d016672`/`02f9ecc`/`47d8fa5`), 238개 테스트 통과.
+  push는 안 함.
+- **`dev`는 이제 review-agent/eval-agent 둘 다 더 안 건드리기로 확정** — 데모2가
+  실서비스 최종 후보일 가능성이 높음(단, `services/review-agent`가 실제 배포본이 아니라
+  `planqa-backend`에 벤더링된 별도 카피가 진짜 배포본이라는 것도 ADR로 확인함 — 그래도
+  결정 자체는 안 바뀜).
+- GitHub 이슈 #20(eval-agent 매칭·FP판정이 단일 LLM 의존) 해결 계획 수립 — 우리가 직접
+  고쳐서 review-agent 구조 실험을 더 신뢰할 수 있는 정확도로 재채점 예정. `feature/eval-
+  agent`(51 commits behind dev, 죽은 브랜치 — dev tip으로 재설정해서 재사용) 위에서
+  작업, **`dev`로 push/PR 안 함**(팀 도구에 합의 없는 구조 변경 얹지 않기로 함).
+- review-agent의 Sentence 위계 판정 제약(`resolve_reported_level`이 강등을 무조건
+  거부하는 게 실은 버그라는 분석, AE-03/DOC-003 사례로 확인)도 같이 고치기로 함.
+- 상세 계획은 `docs/handoff_2026-08-11_eval_agent_deterministic_plan.md` +
+  `C:\Users\HYESEO\.claude\plans\replicated-jingling-pudding.md`(plan 파일, 승인됨).
+
+### Next
+
+- plan 파일의 "실행 순서" 1~10번 그대로 진행 — 아직 코드 한 줄도 안 건드림.
+- eval-agent 재채점 후 전체적인 실험결과 보고서 작성.
