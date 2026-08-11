@@ -46,8 +46,8 @@ class ScriptedLLM(LLMClient):
         self._keyed_responses = keyed_responses
         self.isolated: dict[Any, "ScriptedLLM"] = {}
 
-    def complete_json(self, *, system: str, prompt: str) -> Any:
-        self.calls.append({"system": system, "prompt": prompt})
+    def complete_json(self, *, system: str, prompt: str, cache_prefix: str | None = None) -> Any:
+        self.calls.append({"system": system, "prompt": prompt, "cache_prefix": cache_prefix or ""})
         self.usage.append(CallStats(elapsed_seconds=0.0, prompt_tokens=None, completion_tokens=None, total_tokens=None))
         return next(self._responses)
 

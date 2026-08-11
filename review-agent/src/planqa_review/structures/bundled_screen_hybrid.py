@@ -265,10 +265,12 @@ _SCREEN_HYBRID_SYSTEM = (
 )
 
 _CONFIRM_HYBRID_SYSTEM = (
-    "You are the precise, expensive second pass of a two-stage document QA pipeline. Each "
-    "rule below is given as its own defined text plus a few labeled examples of a real "
-    "violation and a real excused (non-violation) case — use the examples only to calibrate "
-    "borderline cases, the rule text is the authoritative definition. Decide, precisely "
+    "You are the precise, expensive second pass of a two-stage document QA pipeline. Every "
+    "rule you might need is given upfront as its own defined text plus a few labeled "
+    "examples of a real violation and a real excused (non-violation) case — use the "
+    "examples only to calibrate borderline cases, the rule text is the authoritative "
+    "definition. Each candidate below names its rule_id; look that rule up in the set given "
+    "upfront rather than expecting its text repeated per candidate. Decide, precisely "
     "this time, whether each flagged span actually violates its rule — the screening pass "
     "over-flags on purpose, so most candidates should come back violated=false. If it does "
     "violate: quote the exact evidence sentence from the document (original_text), state "
@@ -395,12 +397,18 @@ class _Candidate:
 
 
 def _screen_pass(chunks: list[Chunk], rules: list[RuleDef], global_context: str, llm: LLMClient) -> list[_Candidate]:
+    # rule_block is identical for every call at this tier across all 20 documents in a run
+    # (it's derived only from the rulebook + fewshot bank, never from document/chunk content)
+    # — sent as cache_prefix instead of inlined in `prompt` so Anthropic's prompt caching can
+    # bill it once instead of on every call (속도/비용 최적화 #1). Put first in the message
+    # (see llm/anthropic.py) so the cache hit covers exactly this unchanging span.
     rule_block = "\n".join(_hybrid_block(rule) for rule in rules)
     chunk_block = "\n\n".join(f"[{i}] ({chunk.location})\n{chunk.text}" for i, chunk in enumerate(chunks))
     context_block = f"Document context:\n{global_context}\n\n" if global_context else ""
-    prompt = f"{context_block}Rules to check (text + examples):\n{rule_block}\n\nChunks:\n{chunk_block}\n\nReturn the candidates JSON."
+    cache_prefix = f"Rules to check (text + examples):\n{rule_block}\n\n"
+    prompt = f"{context_block}Chunks:\n{chunk_block}\n\nReturn the candidates JSON."
 
-    response = llm.complete_json(system=_SCREEN_HYBRID_SYSTEM, prompt=prompt)
+    response = llm.complete_json(system=_SCREEN_HYBRID_SYSTEM, prompt=prompt, cache_prefix=cache_prefix)
     raw = response.get("candidates", []) if isinstance(response, dict) else []
     valid_rule_ids = {rule.rule_id for rule in rules}
 
@@ -434,12 +442,20 @@ def _confirm_pass(
     rulebook: RuleBook,
     llm: LLMClient,
 ) -> list[Issue]:
+    # rule_block covers every rule at this tier (same set _screen_pass was given), not just
+    # the ones candidates happen to reference — kept identical to _screen_pass's cache_prefix
+    # on purpose so it's the same cached span reused across screen+confirm+every document in
+    # a run, instead of a per-call filtered subset that would miss the cache every time
+    # (속도/비용 최적화 #1+#2: this also replaces the old per-candidate `_hybrid_block(rule)`
+    # repeat, which duplicated the same rule's full text+examples once per candidate sharing
+    # that rule_id).
+    rule_block = "\n".join(_hybrid_block(rule) for rule in rules_by_id.values())
+    cache_prefix = f"Rules to check (text + examples):\n{rule_block}\n\n"
     blocks = []
     for i, candidate in enumerate(candidates):
-        rule = rules_by_id[candidate.rule_id]
         chunk = chunks[candidate.chunk_index]
         blocks.append(
-            f"[{i}] rule:\n{_hybrid_block(rule)}\n"
+            f"[{i}] rule_id: {candidate.rule_id}\n"
             f"  location: {chunk.location}\n"
             f"  full unit text: {chunk.text!r}\n"
             f"  screened span: {candidate.quoted_text!r} (screening reason: {candidate.reason})"
@@ -455,7 +471,7 @@ def _confirm_pass(
         )
     prompt = f"{context_block}{chr(10).join(blocks)}\n\nReturn the verdicts JSON."
 
-    response = llm.complete_json(system=_CONFIRM_HYBRID_SYSTEM, prompt=prompt)
+    response = llm.complete_json(system=_CONFIRM_HYBRID_SYSTEM, prompt=prompt, cache_prefix=cache_prefix)
     raw_verdicts = response.get("verdicts", []) if isinstance(response, dict) else []
     by_index = {item["index"]: item for item in raw_verdicts if isinstance(item, dict) and "index" in item}
 

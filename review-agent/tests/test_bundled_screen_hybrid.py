@@ -136,11 +136,13 @@ def test_review_document_gives_both_rule_text_and_fewshot_examples_in_both_stage
 
     review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
 
+    # 룰 텍스트+퓨샷 예시는 이제 cache_prefix로 나가고(20문서 전체에 걸친 프롬프트 캐싱
+    # 대상, 속도/비용 최적화 #1+#2), prompt엔 문서별로 달라지는 내용만 남는다.
     mi01_rule = rulebook.rules["MI-01"]
     paragraph_screen = screen_llm.isolated[Level.PARAGRAPH]
     paragraph_confirm = confirm_llm.isolated[Level.PARAGRAPH]
-    assert mi01_rule.text in paragraph_screen.calls[0]["prompt"]
-    assert mi01_rule.text in paragraph_confirm.calls[0]["prompt"]
+    assert mi01_rule.text in paragraph_screen.calls[0]["cache_prefix"]
+    assert mi01_rule.text in paragraph_confirm.calls[0]["cache_prefix"]
 
 
 def test_review_document_two_passes_end_to_end(rulebook_path):
@@ -469,6 +471,41 @@ def test_widen_mi_finding_leaves_the_issue_unchanged_when_location_has_no_matchi
     issue = _mi_issue(level="Paragraph", location="존재하지 않는 위치", original_text="x")
     widened = _widen_mi_finding(issue, tree)
     assert widened.original_text == "x"
+
+
+def test_confirm_cache_prefix_states_a_rules_text_only_once_even_with_two_candidates_for_it(rulebook_path):
+    # 속도/비용 최적화 #2: confirm이 예전엔 candidate마다 그 룰의 전체 텍스트+예시를
+    # 반복해서 프롬프트에 넣었음 — 같은 rule_id로 candidate가 여러 개면 중복이었다. 이제
+    # cache_prefix에 룰 카탈로그를 한 번만 담고 candidate 블록은 rule_id만 참조한다.
+    rulebook = parse_rulebook(rulebook_path)
+    confirm_llm = ScriptedLLM(
+        [{"summary": ""}],
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {"verdicts": [{"index": 0, "violated": False}, {"index": 1, "violated": False}]}
+            ],
+        },
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "candidates": [
+                        {"chunk_index": 0, "rule_id": "MI-01", "quoted_text": "x", "reason": "r"},
+                        {"chunk_index": 1, "rule_id": "MI-01", "quoted_text": "y", "reason": "r"},
+                    ]
+                }
+            ],
+            Level.DOCUMENT: [_EMPTY_CANDIDATES],
+        }
+    )
+
+    review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
+
+    mi01_rule = rulebook.rules["MI-01"]
+    confirm_prompt = confirm_llm.isolated[Level.PARAGRAPH].calls[-1]
+    assert confirm_prompt["cache_prefix"].count(mi01_rule.text) == 1
+    assert "rule_id: MI-01" in confirm_prompt["prompt"]
 
 
 def test_screen_and_confirm_prompts_instruct_active_cross_location_search(rulebook_path):
