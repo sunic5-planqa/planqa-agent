@@ -209,6 +209,39 @@ def test_run_resumable_updates_the_cost_guard_with_actual_token_usage(tmp_path, 
     assert guard.spent_usd > 0  # real token usage from the (fake) LLM clients got recorded
 
 
+def test_run_resumable_stops_the_next_wave_once_running_actual_cost_exceeds_the_cap(tmp_path, rulebook_path, source_dir):
+    # 4문서, max_workers=2 → 2웨이브. 실제 토큰 사용량이 문서당 $8(예상치 $0.01보다 훨씬
+    # 큼)라서 1웨이브가 끝나고 나면 "지금까지 실사용" 기준으로 2웨이브가 캡을 넘긴다 —
+    # 사전 추정 한 번이 아니라 웨이브마다 실사용으로 재확인해야 이런 경우를 잡는다.
+    rulebook = parse_rulebook(rulebook_path)
+    calls: list[str] = []
+
+    def review_fn(doc_id, text, rb, screen_llm, confirm_llm):
+        calls.append(doc_id)
+        confirm_llm.usage.append(_TokenStats(200_000))  # 200k tokens * $40/M = $8/문서
+        return ReviewResult(doc_id=doc_id, global_context="", issues=())
+
+    with pytest.raises(CostCapExceeded):
+        run_resumable(
+            doc_ids=("DOC-001", "DOC-002", "DOC-003", "DOC-004"),
+            rulebook=rulebook,
+            rulebook_path=rulebook_path,
+            source_dir=source_dir,
+            output_dir=tmp_path,
+            golden_rows=[],
+            review_fn=review_fn,
+            build_clients=_build_clients,
+            profile_label="bundled_screen_hybrid",
+            backend_label="anthropic",
+            cost_guard=CostGuard(cap_usd=7.0),
+            estimated_cost_per_doc_usd=0.01,
+            max_workers=2,
+        )
+
+    assert set(calls) == {"DOC-001", "DOC-002"}  # wave 1 ran; wave 2 never launched
+    assert already_done_doc_ids(tmp_path, ("DOC-001", "DOC-002", "DOC-003", "DOC-004")) == ("DOC-001", "DOC-002")
+
+
 def test_run_resumable_stops_submitting_new_docs_once_the_deadline_has_passed(tmp_path, rulebook_path, source_dir):
     rulebook = parse_rulebook(rulebook_path)
     calls: list[str] = []

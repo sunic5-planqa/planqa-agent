@@ -95,57 +95,66 @@ def run_resumable(
     max_workers: int = 5,
     deadline: float | None = None,
 ) -> tuple[ExperimentResult, list[str]]:
-    """Resumable, bounded-concurrency runner for the full doc_ids sweep: doc_ids whose
-    review.json already exists in output_dir are loaded back (zero cost, zero risk) instead
-    of recomputed; the rest are launched through a ThreadPoolExecutor, but only after
-    check_or_raise confirms the WHOLE remaining batch fits under the $7 cap using
-    estimated_cost_per_doc_usd (a real per-doc average — see the 1-doc smoke test in the
-    execution plan). This is the pre-flight check the cap depends on: once a call is made
-    it's billed regardless of what happens after, so this can only stop a batch from
-    *starting*, not partway through — each completed document's actual token usage is still
-    recorded into cost_guard afterward so the next stage's pre-flight check sees real spend,
-    not just the estimate.
+    """Resumable, wave-based runner for the full doc_ids sweep: doc_ids whose review.json
+    already exists in output_dir are loaded back (zero cost, zero risk) instead of
+    recomputed; the rest are launched in waves of `max_workers` documents at a time, each
+    wave gated by check_or_raise against the cap using the running actual per-doc average
+    once at least one real document has completed this call (falling back to
+    estimated_cost_per_doc_usd — a real prior average, e.g. from the 1-doc smoke test — until
+    then). This is what lets the $7 cap actually bind mid-run instead of only as a single
+    upfront estimate: a submitted call is billed regardless of what happens after, so this
+    can only stop the *next wave* from starting, not one already in flight — each completed
+    document's actual token usage is recorded into cost_guard as it finishes, so the very
+    next wave's check already reflects real spend, not just the estimate.
 
     `deadline` (a time.perf_counter() value, matching what callers compare it against) stops
-    *submitting new* documents once passed — already-submitted ones still finish normally
-    (there's no clean way to abort a call already sent to the API, and each one is bounded by
-    its own client-level retry/timeout anyway, so this only needs to stop new work from
-    starting). Documents never submitted this call simply have no review.json yet, so the
-    next run_resumable call picks them up automatically — this is what lets the 3-hour
-    overall deadline degrade into "whatever got done, resumably" instead of a hard failure."""
+    starting new waves once passed — a wave already launched still finishes normally (no
+    clean way to abort a call already sent to the API, and each one is bounded by its own
+    client-level retry/timeout anyway). Documents never submitted this call simply have no
+    review.json yet, so the next run_resumable call picks them up automatically — this is
+    what lets the 3-hour overall deadline degrade into "whatever got done, resumably" instead
+    of a hard failure."""
     already_done = already_done_doc_ids(output_dir, doc_ids)
-    remaining = tuple(doc_id for doc_id in doc_ids if doc_id not in already_done)
+    remaining = list(doc_id for doc_id in doc_ids if doc_id not in already_done)
 
     documents: list[DocumentRun] = [_load_saved_document_run(doc_id, output_dir, golden_rows) for doc_id in already_done]
     errors: list[str] = []
 
-    if remaining:
-        cost_guard.check_or_raise(estimated_cost_per_doc_usd * len(remaining), stage=f"전체 실행({len(remaining)}문서 신규)")
+    def run_one(doc_id: str) -> DocumentRun:
+        document_text = resolve_source_path(source_dir, doc_id).read_text(encoding="utf-8")
+        screen_llm, confirm_llm = build_clients()
+        start = time.perf_counter()
+        result = review_fn(doc_id, document_text, rulebook, screen_llm, confirm_llm)
+        stats = build_run_stats(
+            profile=profile_label,
+            backend=backend_label,
+            rulebook_path=rulebook_path,
+            screen_llm=screen_llm,
+            confirm_llm=confirm_llm,
+            total_wall_seconds=time.perf_counter() - start,
+            call_events=result.call_events,
+        )
+        score = score_issues(doc_id, result.issues, golden_rows)
+        write_report(output_dir / doc_id, result, rulebook, stats)
+        return DocumentRun(doc_id=doc_id, result=result, stats=stats, score=score)
 
-        def run_one(doc_id: str) -> DocumentRun:
-            document_text = resolve_source_path(source_dir, doc_id).read_text(encoding="utf-8")
-            screen_llm, confirm_llm = build_clients()
-            start = time.perf_counter()
-            result = review_fn(doc_id, document_text, rulebook, screen_llm, confirm_llm)
-            stats = build_run_stats(
-                profile=profile_label,
-                backend=backend_label,
-                rulebook_path=rulebook_path,
-                screen_llm=screen_llm,
-                confirm_llm=confirm_llm,
-                total_wall_seconds=time.perf_counter() - start,
-                call_events=result.call_events,
+    completed_new = 0
+    confirm_tokens_seen = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        while remaining:
+            if deadline is not None and time.perf_counter() >= deadline:
+                break
+            # Running actual average (once we have one) is a tighter, real-data estimate for
+            # the *next* wave than the caller's a-priori guess — each wave narrows the
+            # uncertainty this cap is meant to guard against.
+            per_doc_estimate = (
+                (confirm_tokens_seen / 1_000_000 * 40.0) / completed_new if completed_new else estimated_cost_per_doc_usd
             )
-            score = score_issues(doc_id, result.issues, golden_rows)
-            write_report(output_dir / doc_id, result, rulebook, stats)
-            return DocumentRun(doc_id=doc_id, result=result, stats=stats, score=score)
+            wave = remaining[:max_workers]
+            cost_guard.check_or_raise(per_doc_estimate * len(wave), stage=f"다음 배치({len(wave)}문서)")
+            remaining = remaining[len(wave) :]
 
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {}
-            for doc_id in remaining:
-                if deadline is not None and time.perf_counter() >= deadline:
-                    break
-                futures[pool.submit(run_one, doc_id)] = doc_id
+            futures = {pool.submit(run_one, doc_id): doc_id for doc_id in wave}
             for future in as_completed(futures):
                 doc_id = futures[future]
                 try:
@@ -162,7 +171,10 @@ def run_resumable(
                 # merely cheap; folding it in at the Anthropic rate would 5x-overcount real
                 # spend (caught live during the 2026-08-12 1-doc smoke test: $1.11 estimated
                 # vs ~$0.23 actual).
-                cost_guard.record_actual_tokens(doc_run.stats.confirm.total_tokens or 0)
+                tokens = doc_run.stats.confirm.total_tokens or 0
+                cost_guard.record_actual_tokens(tokens)
+                confirm_tokens_seen += tokens
+                completed_new += 1
 
     order = {doc_id: i for i, doc_id in enumerate(doc_ids)}
     documents_sorted = tuple(sorted(documents, key=lambda doc: order[doc.doc_id]))
