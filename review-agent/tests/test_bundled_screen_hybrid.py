@@ -1,14 +1,99 @@
 from __future__ import annotations
 
+from typing import Any
+
 from conftest import ScriptedLLM
 
 from planqa_review.rulebook import parse_rulebook
-from planqa_review.schema import Level
-from planqa_review.structures.bundled_screen_hybrid import review_document
+from planqa_review.schema import Issue, Level
+from planqa_review.structures.bundled_screen_hybrid import _verify_ae_finding, _verify_mi_finding, review_document
 
 _DOC = "# 샘플 PRD\n\n## 1. 목적\n\n간단한 목적 설명입니다.\n\n## 2. 배경\n\n두번째 문단입니다.\n"
 
 _EMPTY_CANDIDATES = {"candidates": []}
+
+
+class _StubVerifyLLM:
+    """A minimal LLMClient double for unit-testing _verify_mi_finding/_verify_ae_finding in
+    isolation, without needing a full ScriptedLLM response queue — mirrors the backend's
+    _StubVerifyLLM in test_api_qa_jobs.py (PR #28/#55)."""
+
+    def __init__(self, response: Any | None, *, raise_error: bool = False) -> None:
+        self._response = response
+        self._raise_error = raise_error
+
+    def complete_json(self, *, system: str, prompt: str) -> Any:
+        if self._raise_error:
+            raise RuntimeError("boom")
+        return self._response
+
+
+def _mi_issue(**overrides) -> Issue:
+    defaults = dict(
+        doc_id="DOC-TEST",
+        level="Paragraph",
+        rule_id="MI-01",
+        location="8. 런칭 계획",
+        description="런칭일/QA 기간이 구체적으로 명시되지 않음",
+        original_text="목표 런칭일: - QA 기간: ~",
+        rationale="시간 조건이 정의되지 않음",
+    )
+    defaults.update(overrides)
+    return Issue(**defaults)
+
+
+def _ae_issue(**overrides) -> Issue:
+    defaults = dict(
+        doc_id="DOC-TEST",
+        level="Paragraph",
+        rule_id="AE-03",
+        location="4. 처리 정책",
+        description="판단 기준이 불명확함",
+        original_text="적당한 기간 내에 처리한다",
+        rationale="구체적 기준이 없음",
+    )
+    defaults.update(overrides)
+    return Issue(**defaults)
+
+
+def test_verify_mi_finding_keeps_the_issue_when_verification_confirms_it_is_missing():
+    llm = _StubVerifyLLM({"actually_missing": True, "reason": "정말 없음"})
+    assert _verify_mi_finding("문서 전문", _mi_issue(), llm) is True
+
+
+def test_verify_mi_finding_drops_the_issue_when_verification_finds_it_present():
+    llm = _StubVerifyLLM({"actually_missing": False, "reason": "8장에 날짜가 있음"})
+    assert _verify_mi_finding("문서 전문", _mi_issue(), llm) is False
+
+
+def test_verify_mi_finding_fails_safe_by_keeping_the_issue_on_llm_error():
+    llm = _StubVerifyLLM(None, raise_error=True)
+    assert _verify_mi_finding("문서 전문", _mi_issue(), llm) is True
+
+
+def test_verify_mi_finding_fails_safe_on_malformed_response():
+    llm = _StubVerifyLLM("not a dict")
+    assert _verify_mi_finding("문서 전문", _mi_issue(), llm) is True
+
+
+def test_verify_ae_finding_keeps_the_issue_when_verification_confirms_it_is_ambiguous():
+    llm = _StubVerifyLLM({"actually_ambiguous": True, "reason": "정말 모호함"})
+    assert _verify_ae_finding("문서 전문", _ae_issue(), llm) is True
+
+
+def test_verify_ae_finding_drops_the_issue_when_verification_finds_it_defined_elsewhere():
+    llm = _StubVerifyLLM({"actually_ambiguous": False, "reason": "3장에 기준이 정의돼 있음"})
+    assert _verify_ae_finding("문서 전문", _ae_issue(), llm) is False
+
+
+def test_verify_ae_finding_fails_safe_by_keeping_the_issue_on_llm_error():
+    llm = _StubVerifyLLM(None, raise_error=True)
+    assert _verify_ae_finding("문서 전문", _ae_issue(), llm) is True
+
+
+def test_verify_ae_finding_fails_safe_on_malformed_response():
+    llm = _StubVerifyLLM("not a dict")
+    assert _verify_ae_finding("문서 전문", _ae_issue(), llm) is True
 
 
 def test_review_document_gives_both_rule_text_and_fewshot_examples_in_both_stages(rulebook_path):
@@ -339,6 +424,52 @@ def test_screen_and_confirm_prompts_include_category_boundary_notes(rulebook_pat
         assert "GA (상위 목표와 세부 내용의 정합성)" in system
         assert "TC (용어 및 단어의 일관성)" in system
         assert "LF (논리 흐름, flow) is purely about" in system
+
+
+def test_review_document_drops_mi_false_positive_but_keeps_other_issues(rulebook_path):
+    # 발견2 (planqa-agent PR #28/#55 패턴): MI 재검증이 "실제로 문서에 있음"이라고 판단하면
+    # 그 이슈는 최종 결과에서 빠지고, 같은 실행의 다른(관계형) 카테고리 이슈는 그대로 남는다.
+    rulebook = parse_rulebook(rulebook_path)
+    confirm_llm = ScriptedLLM(
+        [{"summary": ""}, {"actually_missing": False, "reason": "실제로는 문서에 있음"}],
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "verdicts": [
+                        {
+                            "index": 0,
+                            "violated": True,
+                            "original_text": "간단한 목적 설명입니다.",
+                            "description": "d",
+                            "fix_direction": "f",
+                            "excused": False,
+                        }
+                    ]
+                }
+            ],
+            Level.DOCUMENT: [
+                {
+                    "verdicts": [
+                        {"index": 0, "violated": True, "original_text": "x", "description": "d", "fix_direction": "f", "excused": False}
+                    ]
+                }
+            ],
+        },
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {"candidates": [{"chunk_index": 0, "rule_id": "MI-01", "quoted_text": "간단한 목적 설명입니다.", "reason": "r"}]}
+            ],
+            Level.DOCUMENT: [
+                {"candidates": [{"chunk_index": 0, "rule_id": "GA-01", "quoted_text": "x", "reason": "r"}]}
+            ],
+        }
+    )
+
+    result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
+
+    assert [issue.rule_id for issue in result.issues] == ["GA-01"]
 
 
 def test_review_document_reports_a_clear_error_if_a_plain_scripted_llm_is_used(rulebook_path):
