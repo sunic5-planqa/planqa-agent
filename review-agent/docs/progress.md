@@ -1543,3 +1543,27 @@ Sonnet으로 돌리기 전에, 콜분리 계열(`paragraph_verdict`/`category_fe
 ### Next
 
 - 실행순서 9(`fewshot_bank.py` 재구축 — DOC-001–020 전부 배제)로 계속.
+
+## 2026-08-12 — 실행순서 9: fewshot_bank.py 재구축(leak-safe 범위 확대)
+
+### Done
+
+- `qa_dataset_frozen.xlsx`의 "golden dataset"(위반 예시 원문 소스)/"예외조건 golden
+  dataset"(예외 예시 원문 소스) 두 시트를 직접 대조하는 스크립트로 `ALL_VIOLATION_
+  CANDIDATES`/`ALL_EXCEPTION_CANDIDATES`의 모든 항목(위반 125개+예외 59개)의 실제
+  출처 doc_id를 확인 — 전부 정확히 매칭됨(no_match=0).
+- 기존 배제 범위(파일럿 5문서만)로는 안전했던 위반 예시 13개가 DOC-001–020(20문서 재검증
+  전체 범위)으로 넓히면 leak이 됨을 확인, 전부 제거: AE-03×1(DOC-016), GA-01×1(DOC-017),
+  GA-05×3(DOC-002/005/014), MI-05×3(DOC-004/015/018), MI-08×1(DOC-010), RD-01×1(DOC-011),
+  TC-01×1(DOC-007), TM-01×1(DOC-009), TM-03×1(DOC-019). 예외 예시는 59개 전부 DOC-000
+  기원이라 제거 대상 없음.
+- 결과: AE-03/MI-05는 DOC-000+021–040 안에 실 후보가 0개(합성 백필 안 함, 프로젝트
+  정책). GA-05/TM-01은 각각 1개(원래 4개/2개)로 줄었으나 이게 실제 데이터 상한 — 이
+  두 가지 다 파일 최상단 주석과 `test_fewshot_bank.py`에 명시적으로 고정(향후 실수로
+  합성 예시가 들어가면 테스트가 잡아냄).
+- `test_fewshot_bank.py`/`test_fewshot_retrieval.py`의 옛 배제범위(5문서) 가정 테스트
+  5개를 새 범위(20문서)에 맞게 재작성 — 273/273 통과. (`23b2216`)
+
+### Next
+
+- 실행순서 10(캐싱 최적화 1·2·4번 적용)로 계속.
