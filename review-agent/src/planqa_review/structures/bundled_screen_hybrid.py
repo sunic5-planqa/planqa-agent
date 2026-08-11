@@ -43,6 +43,39 @@ def _extract_global_context(document_text: str, llm: LLMClient) -> str:
 
 _RELATIONAL_CATEGORIES = frozenset({"LG", "LF", "GA"})
 
+# Three category mix-ups come up often enough in real usage to call out specifically — the
+# rule text alone doesn't state each category's own one-line definition, and the surface
+# symptom of all three confusions ("two sentences look different") is genuinely ambiguous
+# without it. First two paragraphs ported verbatim from
+# github.com/sunic5-planqa/planqa-agent PR #27 (issue #26, alpha-test usage); third
+# (LF vs GA/LG) added 2026-08-12 from real user feedback (a coupon-count contradiction was
+# flagged as LF when LF's definition is purely about flow/ordering, not truth).
+_CATEGORY_BOUNDARY_NOTES = (
+    "Two category mix-ups come up often enough to call out specifically. GA (상위 목표와 "
+    "세부 내용의 정합성) is about two statements making genuinely DIFFERENT or CONFLICTING "
+    "claims about what happens, is true, or is allowed — e.g. one statement says a "
+    "combination is permitted, another says it isn't. TC (용어 및 단어의 일관성) is about "
+    "the SAME claim/fact being restated with inconsistent wording or naming while both "
+    "sides still agree on what's actually true. If two statements disagree on the facts, "
+    "that's GA, never TC, regardless of how differently worded they are — TC only fires "
+    "when the wording differs but the underlying claim doesn't.\n"
+    "Separately: before flagging something as MI (정보 누락, missing information) because a "
+    "term or concept seems undefined, consider whether it might just be a reworded "
+    "reference to something already established elsewhere in the document (a synonym, an "
+    "abbreviation, a paraphrase) — that's TC (inconsistent naming for something that does "
+    "exist), not MI. You're only given a short document-context summary here, not a full "
+    "glossary of every term used so far, so a term's absence from that summary is not "
+    "evidence it's genuinely new; lean toward TC over MI whenever a plausible earlier "
+    "referent exists, and reserve MI for things the document doesn't address at all.\n"
+    "Separately again: LF (논리 흐름, flow) is purely about sentence/paragraph ordering and "
+    "connectivity being awkward or hard to follow — it has nothing to do with whether the "
+    "content itself is true or consistent. If two statements assert different or "
+    "conflicting facts (e.g. one says 2 coupons, another says 1), that is a GA or LG "
+    "problem, never LF, no matter how adjacent or disconnected the two statements read. "
+    "Only flag LF when the actual claims agree and the problem is purely how they're "
+    "sequenced or connected."
+)
+
 _SCREEN_HYBRID_SYSTEM = (
     "You are the cheap, wide first pass of a two-stage document QA pipeline (screen now, "
     "a stronger model verifies later) — favor recall over precision, flag anything even "
@@ -56,6 +89,7 @@ _SCREEN_HYBRID_SYSTEM = (
     "linearly for those — first mentally collect every stated goal/KPI/policy sentence and, "
     "separately, every stated constraint/capability/schedule sentence across the whole "
     "input, then check each pairing for a genuine conflict before flagging one.\n"
+    f"{_CATEGORY_BOUNDARY_NOTES}\n"
     'Respond with JSON only: {"candidates": [{"chunk_index": <int>, "rule_id": "<id>", '
     '"quoted_text": "<exact span from the chunk>", "reason": "<one short line>"}, ...]}'
 )
@@ -96,6 +130,10 @@ _CONFIRM_HYBRID_SYSTEM = (
     "should already be that exact sentence, so this is just labeling the scope you already "
     "quoted. Omit \"level\" (or repeat the chunk's own level) only when the finding's true "
     "scope genuinely matches the chunk you were given, neither broader nor narrower.\n"
+    f"{_CATEGORY_BOUNDARY_NOTES} A candidate you're confirming was already assigned its "
+    "rule_id by the screening pass, which can mis-tag exactly these confusions — if the "
+    "candidate doesn't actually fit the rule you were given for that reason, set "
+    "violated=false rather than confirming a violation of the wrong rule.\n"
     'Respond with JSON only: {"verdicts": [{"index": <int>, "violated": <bool>, '
     '"original_text": "<quote>", "description": "<what\'s wrong>", "rationale": '
     '"<why it violates the rule>", "fix_direction": "<suggested revision>", "excused": '

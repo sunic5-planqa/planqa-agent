@@ -314,6 +314,33 @@ def test_screen_and_confirm_prompts_instruct_active_cross_location_search(rulebo
     assert "actively search" in confirm_system
 
 
+def test_screen_and_confirm_prompts_include_category_boundary_notes(rulebook_path):
+    # 발견1(PR #27)+발견4(2026-08-12): GA/TC/MI/LF 경계 혼동을 막는 프롬프트 보강이
+    # 실제로 두 시스템 프롬프트 모두에 들어가는지 확인.
+    rulebook = parse_rulebook(rulebook_path)
+    confirm_llm = ScriptedLLM(
+        [{"summary": ""}],
+        keyed_responses={Level.DOCUMENT: [{"verdicts": [{"index": 0, "violated": False}]}]},
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [_EMPTY_CANDIDATES],
+            Level.DOCUMENT: [
+                {"candidates": [{"chunk_index": 0, "rule_id": "GA-01", "quoted_text": "x", "reason": "r"}]}
+            ],
+        }
+    )
+
+    review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
+
+    screen_system = screen_llm.isolated[Level.DOCUMENT].calls[-1]["system"]
+    confirm_system = confirm_llm.isolated[Level.DOCUMENT].calls[-1]["system"]
+    for system in (screen_system, confirm_system):
+        assert "GA (상위 목표와 세부 내용의 정합성)" in system
+        assert "TC (용어 및 단어의 일관성)" in system
+        assert "LF (논리 흐름, flow) is purely about" in system
+
+
 def test_review_document_reports_a_clear_error_if_a_plain_scripted_llm_is_used(rulebook_path):
     # A plain ScriptedLLM([...]) (no keyed_responses) used against a structure that
     # dispatches concurrently must fail with a clear, specific message in tier_errors —
