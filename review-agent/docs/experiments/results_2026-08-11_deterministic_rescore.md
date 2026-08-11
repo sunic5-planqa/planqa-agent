@@ -59,6 +59,24 @@ rule_id"만 false_positive로, 나머지는 중립 `unmatched`로 분류하도�
 (strict 채점 — rule_id와 Level 둘 다 정확해야 인정 — 은 아래 "Level 버그" 절에서 따로
 다룬다. 대부분 0%라 이 표에 같이 넣으면 정보량이 오히려 줄어든다.)
 
+### FP·precision을 읽을 때 반드시 알아야 할 것
+
+recall = TP/(TP+FN) — golden 6건 중 몇 건을 찾았는지. **precision = TP/(TP+FP) — FP가
+높을수록 precision은 낮아진다(FP는 recall이 아니라 precision에 영향).** 표에서 FP를
+직접 보여주는 대신 precision으로 환산해서 보여준다.
+
+**여기서 precision 100%가 "예측이 다 맞았다"는 뜻이 아니다.** 결정론적 매처는 rule_id가
+같은 predicted 이슈와 golden 이슈만 "매칭"으로 인정하므로, 매칭된 쌍은 정의상 항상
+rule_id가 같다 — "매칭됐는데 rule_id가 다른" FP는 구조적으로 나올 수가 없다. FP가 잡히는
+경로는 딱 하나, **predicted 이슈가 rulebook에 존재하지도 않는 rule_id를 지어낸 경우**뿐이다
+(review-agent는 그런 적이 없어서 FP=0, precision=100%). 매칭되지 않은 나머지 예측
+(표의 `unmatched` — 파일럿이 검토한 5개 문서 전체에서 나온 미매칭 predicted 이슈를
+합산한 값, 문서별 내역은 `report.json`의 `documents.<doc_id>.fp_candidates`에 있음)은
+"확인된 오답"도 "확인된 정답"도 아닌 **미확인** 상태로 분모·분자 어디에도 들어가지 않는다 — 즉 이 precision은 "review-agent가
+없는 rule_id를 지어내지 않는다"는 아주 약한 사실만 보증하고, "지적한 것 대부분이 실제로
+맞다"는 것까지는 보증하지 않는다. 발표에서 "precision 100%"를 인용할 때는 이 한계를
+같이 말해야 한다.
+
 ## (참고) 최초 단일모델 파일럿 — ①②③ 설계 이전
 
 정식 축 비교를 설계하기 전, 기본 프로필(제안5 baseline, screen/confirm 둘 다 Gemini
@@ -204,8 +222,9 @@ Logical Unit/Document 방향으로 어긋나 있거나(이 버그와 무관 — 
 ## 결론
 
 - **`bundled_screen_hybrid`(②문단형·①2단계·③콜통합×룰과퓨샷) 채택 추천 유지.**
-  recall 50%로 최고(동률), 비용 최저, unmatched 0건, precision 100% — 이 파일럿에서
-  나올 수 있는 가장 깨끗한 결과.
+  recall 50%로 최고(동률), 비용 최저, unmatched 0건(다른 구조와 달리 판단 보류 상태로
+  남은 예측이 하나도 없음) — precision 100%는 "존재하지 않는 rule_id를 지어낸 적이
+  없다"는 약한 보증이라 이 결론의 핵심 근거는 아니다.
 - ①(2단계)·②(문단형)의 결론은 결정론적 재채점에서 unmatched 차이(96건 vs 9건 등)로
   더 강하게 재확인됐다.
 - Level 버그는 실재했고 수정도 확인됐지만, 이 특정 golden 6건 표본에서 정량적 효과는
