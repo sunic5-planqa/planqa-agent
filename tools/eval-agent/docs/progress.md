@@ -664,3 +664,32 @@ matcher might have missed — result was mixed, which shaped the design.
   calls end to end).
 - Still open from earlier: Document-tier relational-detection weak spot (review-agent's own
   lead) and whether `--judge-ensemble` on triage changes the taxonomy counts.
+
+## 2026-08-12 — `_CITATION` regex missed prose citations (found computing a slide number)
+
+Zero-cost sanity check for a presentation figure ("예외조건 O건 중 O건 방어") surfaced a
+real bug in `verifier.py`'s §3 reference-exception check, not a scoring-methodology issue.
+
+### Done
+
+- `has_valid_reference_exception()` ran against 4 real "예외조건 data" QA-dataset rows (the
+  only 4 of 29 exception rows whose rule_id — AE-01/GA-03/LG-03/TC-02 — has a deterministic
+  §3 check at all) and returned 0/4 "excused", even though all 4 clearly satisfy the
+  rulebook's definition (문서명+섹션 참조 표기 in the same paragraph as the flagged text).
+- Root cause: `_CITATION` only recognized the rulebook's own illustrative shorthand
+  (`제목(DOC-XXX) 참고/참조`) — none of the 4 rows cite that way; they all use prose
+  ("「제목」 2-4 '...'을 따른다" / "...에 해당하는 경우").
+- Split into `_CITATION_DOC_CODE` (unchanged) + new `_CITATION_NATURAL`, OR'd via
+  `_has_citation()`. Same fix applied to review-agent's trimmed copy of this file so the two
+  don't drift.
+- Added 2 regression tests for the prose-citation pattern; the existing DOC-006 counter-
+  example test (citation in a *different* paragraph than the flagged text must NOT excuse)
+  still passes unchanged — the fix only widens what counts as a citation, not the
+  same-paragraph requirement that does the actual excusing.
+- 86/86 eval-agent tests pass (84 existing + 2 new), 124/124 review-agent tests pass.
+- Re-ran the 4 rows post-fix: 4/4 now correctly recognized as excused.
+
+### Next
+
+- The other 25 "예외조건 data" rows have no deterministic check (LLM-judgment-only
+  exceptions) — testing those needs an actual review-agent run, i.e. API cost.
