@@ -1341,3 +1341,28 @@ Sonnet으로 돌리기 전에, 콜분리 계열(`paragraph_verdict`/`category_fe
 
 - eval-agent 쪽 재채점(`feature/eval-agent`, 이미 완료된 결정론적 매칭/Level 부분점수
   구현)으로 기존 `predictions.json` 재채점 → 전체적인 실험결과 보고서 작성.
+
+## 2026-08-11 — 전체 재채점 + Sentence 수정 검증 + 종합 보고서
+
+### Done
+
+- 기존 22개 파일럿 `predictions.json`을 전부 수정된 eval-agent(`feature/eval-agent`,
+  `../planqa-eval-agent-evalwt` 워크트리에서 실행)로 재채점 — review-agent는 다시 안
+  돌렸으므로 API 비용 없음. golden dataset 시트가 review-agent/eval-agent 양쪽에서
+  바이트 단위로 동일함을 먼저 확인.
+- **핵심 발견**: 22개 중 20개에서 tier_accuracy가 0.00에 가깝고 mean_level_distance가
+  거의 항상 1.00 — rule_id는 맞았는데 Level이 체계적으로 한 단계씩 어긋난다는 게 처음으로
+  숫자로 드러남. 정확히 이번에 고친 Sentence 강등 버그가 원인일 가능성이 높음.
+- 사용자 승인 받아 `bundled_screen_hybrid`를 DOC-003/DOC-006 대상으로 수정된 코드로
+  **소규모 재실행**(API 비용 발생, 49초): tier_accuracy 0.00 → 0.33, AE-03 항목이 golden
+  Sentence ↔ predicted Sentence로 완전 일치(수정 전엔 Paragraph로 어긋났던 바로 그 자리) —
+  수정이 실제로 작동함을 확인. 단, 2문서/3쌍 표본이라 방향성 확인 수준.
+- 종합 보고서 작성: `docs/experiments/results_2026-08-11_deterministic_rescore.md`
+  (`results_2026-08-10_final_summary.md`를 대체하지 않고 보완).
+
+### Next
+
+- `bundled_screen_hybrid` 5문서 전체를 수정된 코드로 재실행하면 이번 수정의 효과를
+  5문서/6위반 기준 깨끗한 숫자로 확인 가능 — API 비용 발생, 사용자 승인 대기.
+- eval-agent의 문서 스코핑 로직(파일럿마다 recall 분모가 다른 문제)은 이슈 #20과
+  별개, 팀 공유 가치는 있으나 이번 세션 범위 밖.
