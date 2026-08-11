@@ -1522,3 +1522,24 @@ Sonnet으로 돌리기 전에, 콜분리 계열(`paragraph_verdict`/`category_fe
 ### Next
 
 - 실행순서 8(발견7: TC 용어 목록 추출)로 계속.
+
+## 2026-08-12 — 실행순서 8: 발견7 구현, 발견1–8 코드 작업 전부 완료
+
+### Done
+
+- **실행순서 8 (발견7)**: `_extract_global_context`가 서술형 요약과 별도로 `terms`
+  목록(용어+정의)도 한 번의 호출로 같이 추출하도록 확장(반환형 `str` → `tuple[str, str]`,
+  glossary는 텍스트로 포맷). `_confirm_pass`에 TC candidate가 있을 때만(다른 카테고리엔
+  불필요한 토큰이라 게이트) 이 용어 목록을 컨텍스트에 추가. 반환형이 바뀌어서
+  `_run_pass`/`review_document`의 호출부 전부 `term_glossary` 인자를 추가로 스레딩.
+  글로서리 파싱(정상/누락/malformed 항목 스킵) + TC 있을 때만 포함되는지/없을 때 안
+  포함되는지 테스트 — 274/274 통과. (`86a280f`)
+- **발견1–8 코드 작업 전부 완료**(실행순서 2–8) — `bundled_screen_hybrid.py`가 이번
+  세션에서 상당히 확장됨(약 250줄 추가): PR #30 포팅, 발견8 정규식 수정(review-agent +
+  eval-agent 워크트리 양쪽), 카테고리 경계 노트, MI/AE 재검증, 인용 서브스트링 보정, RD
+  두 번째 위치, MI 프레이밍 확장, TC 용어집. 전부 mocked 테스트로 로직 확인, 아직 실 API
+  호출 검증은 안 함(실행순서 12에서 1문서로 확인 예정).
+
+### Next
+
+- 실행순서 9(`fewshot_bank.py` 재구축 — DOC-001–020 전부 배제)로 계속.
