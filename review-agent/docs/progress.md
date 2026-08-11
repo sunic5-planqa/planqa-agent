@@ -1442,3 +1442,30 @@ Sonnet으로 돌리기 전에, 콜분리 계열(`paragraph_verdict`/`category_fe
   hybrid_revalidation.md` 참고(시간 예산은 3시간으로 갱신됨). 사용자가 자리를 비운
   동안 자율 실행(계획 최상단 "자율 실행 범위" 참고) — push/PR 머지/PR #33 병합만
   마지막에 승인받음.
+
+## 2026-08-12 — 실행순서 2·3: PR #30 + 발견8 포팅
+
+### Done
+
+- **실행순서 2 (PR #30)**: `Issue`에 `related_original_text` 필드 추가(LG/LF/GA만,
+  `related_location`과 같은 게이트). `bundled_screen_hybrid.py`의 confirm 프롬프트가
+  관련 위치의 실제 원문 인용도 요청하도록 확장, `_confirm_pass`에서 파싱해 `Issue`에
+  채움, `diff_report.py`(JSON+markdown) 출력에 노출. 테스트 2개 추가(관계형 카테고리엔
+  채워지는지, 비관계형엔 null로 남는지) — review-agent 243/243 테스트 통과.
+  (`7dea1ac`)
+- **실행순서 3 (발견8)**: `verifier.py`의 `_CITATION`을 `_CITATION_DOC_CODE`+
+  `_CITATION_NATURAL`(PR #32 정규식 그대로)로 분리, `_has_citation()` 헬퍼로 OR 결합.
+  review-agent엔 `tests/test_verifier.py`가 없었어서 새로 만들어 PR #32의 회귀
+  테스트 2개(프로즈 인용 두 스타일) + 기존 케이스(DOC코드 인용, 다른 문단 반례, source
+  없음) 포함 6개로 커버 — 11/11 통과. (`1ed8cb4`)
+  eval-agent 쪽(`C:/Users/HYESEO/Desktop/eval-agent-latest/tools/eval-agent/src/
+  planqa_eval/verifier.py` + `tests/test_verifier.py`)에도 동일하게 적용 — PR #32의
+  회귀 테스트 2개 그대로 포팅, 82/82(기존 80 + 신규 2) 통과 확인(임시 venv로 검증 후
+  삭제). **이 워크트리는 detached HEAD라 커밋하지 않고 워킹트리에만 적용된 상태로
+  남겨둠** — 팀 PR #32가 이미 이 fix를 갖고 있어서 우리 쪽은 20문서 재검증용 eval-agent
+  재채점(실행순서 14)이 이 fix를 반영하게 하는 목적으로만 필요, 별도 커밋/브랜치를
+  만들면 그 detached HEAD에 붙어 유실되기 쉬워 오히려 위험 판단.
+
+### Next
+
+- 실행순서 4(발견1+4 `_CATEGORY_BOUNDARY_NOTES` 포팅)로 계속.
