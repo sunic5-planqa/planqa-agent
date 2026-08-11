@@ -1567,3 +1567,32 @@ Sonnet으로 돌리기 전에, 콜분리 계열(`paragraph_verdict`/`category_fe
 ### Next
 
 - 실행순서 10(캐싱 최적화 1·2·4번 적용)로 계속.
+
+## 2026-08-12 — 실행순서 10: 캐싱 최적화(#1+#2), #4는 의도적으로 보류
+
+### Done
+
+- `_screen_pass`/`_confirm_pass`의 룰+퓨샷 블록(rule_block)을 `cache_prefix`로 분리 —
+  `llm/anthropic.py`가 이미 지원하던 `cache_prefix`(1개 캐시 브레이크포인트)를
+  `bundled_screen_hybrid.py`가 처음으로 실제로 사용하게 됨. rule_block은 문서/후보와
+  무관하게 룰북+퓨샷뱅크에서만 나오므로 20문서+screen/confirm 전체에 걸쳐 완전히
+  동일 — 캐시 적중률 극대화 목적으로 confirm도 candidate가 실제로 걸린 룰만 담지 않고
+  해당 tier의 룰 전체를 담게 통일(대신 이게 최적화 #2도 자동으로 해결: candidate마다
+  같은 룰 텍스트를 반복하던 것을 rule_id 참조 하나로 교체).
+- `system` 프롬프트는 `llm/anthropic.py`에 이미 자동 캐싱돼 있었음(최적화 #5, 별도
+  조치 불필요 — 발견1–8 작업 중 시스템 프롬프트가 꽤 커졌는데도 그대로 이득).
+- **최적화 #4(global_context 캐싱)는 의도적으로 보류**: Anthropic 캐시 브레이크포인트가
+  현재 `LLMClient.complete_json`엔 `cache_prefix` 슬롯 1개뿐이라(전체 12개 구조가
+  공유하는 인터페이스), rule_block(문서 전체에 걸쳐 재사용, 고가치)과 global_context
+  (문서 1개 안에서만 재사용, 저가치)를 하나로 합치면 오히려 rule_block의 20문서 캐시
+  재사용을 깨버림 — 인터페이스에 캐시 슬롯을 추가하는 건 이 구조 하나만을 위해 12개
+  구조가 공유하는 shared infra를 건드리는 큰 변경이라 이번 스코프에서는 안 함(비용/
+  리스크 대비 이득 작음 판단).
+- 테스트: 같은 룰에 candidate가 여러 개일 때 cache_prefix에 룰 텍스트가 정확히 1번만
+  나오는지, prompt엔 rule_id 참조만 있는지 확인 + 기존 프롬프트 내용 검증 테스트를
+  cache_prefix 기준으로 수정. 274/274 통과. (`c397642`)
+
+### Next
+
+- 실행순서 11(resumable 실행 + Batch API 인프라 + $7 가드 + 3시간 동적 타임아웃)로
+  계속.
