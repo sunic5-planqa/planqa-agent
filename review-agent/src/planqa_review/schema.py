@@ -44,3 +44,7 @@ class Issue:
     # 단일 위치 오류라 항상 None. 채워지는 곳: confirm 단계 verdict 응답.
     # (github.com/sunic5-planqa/planqa-agent issue #4)
     related_location: str | None = None
+    # related_location은 라벨(예: "1. 목적")뿐이라 그 위치의 실제 원문 인용이 없었음 —
+    # 프론트가 두 번째 위치도 하이라이트하려면 원문 텍스트가 필요해서 추가.
+    # (github.com/sunic5-planqa/planqa-agent PR #30)
+    related_original_text: str | None = None

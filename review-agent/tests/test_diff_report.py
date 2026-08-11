@@ -47,6 +47,29 @@ def test_to_json_dict_matches_adr_0001_contract_fields():
     assert item["issue_id"] == "REV-DOC-TEST-000"
 
 
+def test_to_json_dict_includes_related_original_text():
+    result = ReviewResult(
+        doc_id="DOC-TEST",
+        global_context="",
+        issues=(_issue(related_location="2. 배경", related_original_text="배경 설명입니다."),),
+    )
+    [item] = to_json_dict(result)
+    assert item["related_location"] == "2. 배경"
+    assert item["related_original_text"] == "배경 설명입니다."
+
+
+def test_to_markdown_renders_related_original_text(rulebook_path):
+    rulebook = parse_rulebook(rulebook_path)
+    result = ReviewResult(
+        doc_id="DOC-TEST",
+        global_context="",
+        issues=(_issue(related_location="2. 배경", related_original_text="배경 설명입니다."),),
+    )
+    markdown = to_markdown(result, rulebook)
+    assert "관련 위치: 2. 배경" in markdown
+    assert "관련 위치 원문: 배경 설명입니다." in markdown
+
+
 def test_to_json_dict_keeps_explicit_issue_id():
     result = ReviewResult(doc_id="DOC-TEST", global_context="", issues=(_issue(issue_id="REV-007"),))
     [item] = to_json_dict(result)

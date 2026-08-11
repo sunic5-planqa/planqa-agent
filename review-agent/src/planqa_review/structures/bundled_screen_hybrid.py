@@ -74,8 +74,10 @@ _CONFIRM_HYBRID_SYSTEM = (
     "set excused=true (with excuse_reason) when it applies. For the LG/LF/GA categories "
     "specifically, a violation is by definition a relationship error between two locations "
     "in the document — also name the OTHER location involved (related_location), using the "
-    "same label style as the location you were given; leave related_location null for "
-    "every other category, or if no specific second location can be identified. For GA/LG/LF "
+    "same label style as the location you were given, AND quote the exact evidence sentence "
+    "from that other location (related_original_text) the same way you quoted original_text; "
+    "leave both null for every other category, or if no specific second location can be "
+    "identified. For GA/LG/LF "
     "specifically, before confirming a candidate, actively search the rest of the document "
     "context you were given for the specific other statement it conflicts with — don't rely "
     "on the screening pass's guess alone; if you can't locate a concrete conflicting "
@@ -98,6 +100,7 @@ _CONFIRM_HYBRID_SYSTEM = (
     '"original_text": "<quote>", "description": "<what\'s wrong>", "rationale": '
     '"<why it violates the rule>", "fix_direction": "<suggested revision>", "excused": '
     '<bool>, "excuse_reason": "<string or null>", "related_location": "<string or null>", '
+    '"related_original_text": "<string or null>", '
     '"level": "<Document|Logical Unit|Paragraph|Sentence, or null>"}, ...]}'
 )
 
@@ -191,9 +194,12 @@ def _confirm_pass(
         if excused:
             continue
         related_location = None
+        related_original_text = None
         if rules_by_id[candidate.rule_id].category in _RELATIONAL_CATEGORIES:
             raw_related = values.get("related_location")
             related_location = str(raw_related).strip() or None if raw_related else None
+            raw_related_text = values.get("related_original_text")
+            related_original_text = str(raw_related_text).strip() or None if raw_related_text else None
         reported_level, reported_location = resolve_reported_level(level, chunk.location, values.get("level"))
         issues.append(
             Issue(
@@ -207,6 +213,7 @@ def _confirm_pass(
                 rationale=str(values.get("rationale") or "").strip() or None,
                 fix_direction=str(values.get("fix_direction") or "").strip() or None,
                 related_location=related_location,
+                related_original_text=related_original_text,
             )
         )
     return issues

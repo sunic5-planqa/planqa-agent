@@ -224,6 +224,7 @@ def test_review_document_dispatches_lg_and_lf_at_document_level_too(rulebook_pat
                             "fix_direction": "f",
                             "excused": False,
                             "related_location": "다른 위치",
+                            "related_original_text": "다른 위치의 실제 문장",
                         }
                     ]
                 }
@@ -244,6 +245,50 @@ def test_review_document_dispatches_lg_and_lf_at_document_level_too(rulebook_pat
     [issue] = result.issues
     assert issue.rule_id == "LG-02"
     assert issue.level == "Document"
+    assert issue.related_location == "다른 위치"
+    assert issue.related_original_text == "다른 위치의 실제 문장"
+
+
+def test_review_document_leaves_related_original_text_null_for_non_relational_categories(rulebook_path):
+    # PR #30 gates related_original_text the same way related_location already is —
+    # even if a confirm response somehow includes it for a non-relational category
+    # (e.g. MI), it must not leak through onto the Issue.
+    rulebook = parse_rulebook(rulebook_path)
+    confirm_llm = ScriptedLLM(
+        [{"summary": ""}],
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "verdicts": [
+                        {
+                            "index": 0,
+                            "violated": True,
+                            "original_text": "간단한 목적 설명입니다.",
+                            "description": "d",
+                            "fix_direction": "f",
+                            "excused": False,
+                            "related_location": "다른 위치",
+                            "related_original_text": "다른 위치의 실제 문장",
+                        }
+                    ]
+                }
+            ],
+        },
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {"candidates": [{"chunk_index": 0, "rule_id": "MI-01", "quoted_text": "간단한 목적 설명입니다.", "reason": "r"}]}
+            ],
+            Level.DOCUMENT: [_EMPTY_CANDIDATES],
+        }
+    )
+
+    result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
+
+    [issue] = result.issues
+    assert issue.related_location is None
+    assert issue.related_original_text is None
 
 
 def test_screen_and_confirm_prompts_instruct_active_cross_location_search(rulebook_path):
