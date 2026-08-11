@@ -8,6 +8,7 @@ from planqa_review.rulebook import parse_rulebook
 from planqa_review.schema import Issue, Level
 from planqa_review.document import parse_document
 from planqa_review.structures.bundled_screen_hybrid import (
+    _extract_global_context,
     _resolve_quoted_span,
     _verify_ae_finding,
     _verify_mi_finding,
@@ -582,6 +583,86 @@ def test_review_document_corrects_original_text_when_confirm_quotes_the_heading_
     [issue] = result.issues
     assert "간단한 목적 설명입니다." in issue.original_text
     assert "1. 목적" != issue.original_text
+
+
+def test_extract_global_context_returns_summary_and_term_glossary():
+    llm = ScriptedLLM(
+        [
+            {
+                "summary": "요약문",
+                "terms": [{"term": "MAU", "definition": "월간 활성 사용자"}, {"term": "PM", "definition": "제품 관리자"}],
+            }
+        ]
+    )
+    summary, glossary = _extract_global_context("문서 전문", llm)
+    assert summary == "요약문"
+    assert "MAU: 월간 활성 사용자" in glossary
+    assert "PM: 제품 관리자" in glossary
+
+
+def test_extract_global_context_handles_missing_terms_field():
+    llm = ScriptedLLM([{"summary": "요약문"}])
+    summary, glossary = _extract_global_context("문서 전문", llm)
+    assert summary == "요약문"
+    assert glossary == ""
+
+
+def test_extract_global_context_skips_malformed_term_entries():
+    llm = ScriptedLLM([{"summary": "s", "terms": ["not a dict", {"term": "X"}, {"term": "Y", "definition": "def"}]}])
+    _summary, glossary = _extract_global_context("문서 전문", llm)
+    assert glossary == "- Y: def"
+
+
+def test_confirm_prompt_includes_term_glossary_only_for_tc_candidates(rulebook_path):
+    # 발견7: TC는 문단 이전에 쓰인 용어를 알아야 판정 가능한데 global_context(서술형 요약)엔
+    # 개별 용어가 대부분 빠져 있음 — TC candidate가 있을 때만 명시적 용어 목록을 confirm
+    # 프롬프트에 추가로 넘기는지(그리고 없을 땐 안 넘기는지) 확인.
+    rulebook = parse_rulebook(rulebook_path)
+    confirm_llm = ScriptedLLM(
+        [{"summary": "", "terms": [{"term": "MAU", "definition": "월간 활성 사용자"}]}],
+        keyed_responses={
+            Level.PARAGRAPH: [{"verdicts": [{"index": 0, "violated": False}, {"index": 1, "violated": False}]}],
+        },
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "candidates": [
+                        {"chunk_index": 0, "rule_id": "TC-01", "quoted_text": "x", "reason": "r"},
+                        {"chunk_index": 1, "rule_id": "MI-01", "quoted_text": "y", "reason": "r"},
+                    ]
+                }
+            ],
+            Level.DOCUMENT: [_EMPTY_CANDIDATES],
+        }
+    )
+
+    review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
+
+    confirm_prompt = confirm_llm.isolated[Level.PARAGRAPH].calls[-1]["prompt"]
+    assert "MAU: 월간 활성 사용자" in confirm_prompt
+
+
+def test_confirm_prompt_omits_term_glossary_when_no_tc_candidates(rulebook_path):
+    rulebook = parse_rulebook(rulebook_path)
+    confirm_llm = ScriptedLLM(
+        [{"summary": "", "terms": [{"term": "MAU", "definition": "월간 활성 사용자"}]}],
+        keyed_responses={Level.PARAGRAPH: [{"verdicts": [{"index": 0, "violated": False}]}]},
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {"candidates": [{"chunk_index": 0, "rule_id": "MI-01", "quoted_text": "x", "reason": "r"}]}
+            ],
+            Level.DOCUMENT: [_EMPTY_CANDIDATES],
+        }
+    )
+
+    review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
+
+    confirm_prompt = confirm_llm.isolated[Level.PARAGRAPH].calls[-1]["prompt"]
+    assert "MAU: 월간 활성 사용자" not in confirm_prompt
 
 
 def test_review_document_drops_mi_false_positive_but_keeps_other_issues(rulebook_path):

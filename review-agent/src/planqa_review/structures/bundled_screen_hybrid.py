@@ -33,15 +33,31 @@ _GLOBAL_CONTEXT_SYSTEM = (
     "so it must stand on its own without the full document attached. Capture: the "
     "document's core purpose, its key policies/constraints, and its target KPIs/goals — "
     "exactly what a reviewer needs to judge whether *other* sections of the document stay "
-    "consistent with what this document set out to do. Keep it to a few sentences.\n"
-    'Respond with JSON only: {"summary": "<compact Korean summary>"}'
+    "consistent with what this document set out to do. Keep it to a few sentences. "
+    "Separately, also list every distinct named term, concept, or entity the document "
+    "introduces (product/feature names, policy names, roles, key numbers/limits) along with "
+    "a short definition of what it means IN THIS document — this is a glossary, not a "
+    "summary, so be exhaustive about terms even if the summary above already mentions some "
+    "of them; a later reviewer will use this list to tell whether a term seen in one section "
+    "is a genuinely new concept or just a reworded reference to one already defined here.\n"
+    'Respond with JSON only: {"summary": "<compact Korean summary>", "terms": '
+    '[{"term": "<term as it appears>", "definition": "<short definition>"}, ...]}'
 )
 
 
-def _extract_global_context(document_text: str, llm: LLMClient) -> str:
+def _extract_global_context(document_text: str, llm: LLMClient) -> tuple[str, str]:
     response = llm.complete_json(system=_GLOBAL_CONTEXT_SYSTEM, prompt=document_text)
     summary = response.get("summary") if isinstance(response, dict) else None
-    return summary.strip() if isinstance(summary, str) and summary.strip() else ""
+    raw_terms = response.get("terms") if isinstance(response, dict) else None
+    glossary_lines = [
+        f"- {item['term']}: {item['definition']}"
+        for item in (raw_terms if isinstance(raw_terms, list) else [])
+        if isinstance(item, dict) and item.get("term") and item.get("definition")
+    ]
+    return (
+        summary.strip() if isinstance(summary, str) and summary.strip() else "",
+        "\n".join(glossary_lines),
+    )
 
 
 _MI_VERIFY_SYSTEM = (
@@ -413,6 +429,7 @@ def _confirm_pass(
     doc_id: str,
     level: Level,
     global_context: str,
+    term_glossary: str,
     source_text: str,
     rulebook: RuleBook,
     llm: LLMClient,
@@ -428,6 +445,14 @@ def _confirm_pass(
             f"  screened span: {candidate.quoted_text!r} (screening reason: {candidate.reason})"
         )
     context_block = f"Document context:\n{global_context}\n\n" if global_context else ""
+    # 발견7: TC(용어 일관성)는 앞서 이 문단 이전에 쓰인 용어를 알아야 판정 가능한데,
+    # global_context는 서술형 요약이라 개별 용어가 대부분 빠져 있다(용어집이 아님) — TC
+    # candidate가 있을 때만 명시적 용어 목록을 추가로 준다(다른 카테고리엔 불필요한 토큰).
+    if term_glossary and any(rules_by_id[c.rule_id].category == "TC" for c in candidates):
+        context_block += (
+            f"Known terms/definitions catalogued so far (not exhaustive — absence here does "
+            f"NOT mean a term is new, only that it wasn't catalogued):\n{term_glossary}\n\n"
+        )
     prompt = f"{context_block}{chr(10).join(blocks)}\n\nReturn the verdicts JSON."
 
     response = llm.complete_json(system=_CONFIRM_HYBRID_SYSTEM, prompt=prompt)
@@ -492,6 +517,7 @@ def _run_pass(
     chunks: list[Chunk],
     doc_id: str,
     global_context: str,
+    term_glossary: str,
     document_text: str,
     rulebook: RuleBook,
     screen_llm: LLMClient,
@@ -540,6 +566,7 @@ def _run_pass(
                 doc_id,
                 level,
                 global_context,
+                term_glossary,
                 document_text,
                 rulebook,
                 isolated_confirm,
@@ -566,7 +593,7 @@ def review_document(
     events: list[CallEvent] = []
 
     try:
-        global_context = record_call(
+        global_context, term_glossary = record_call(
             confirm_llm,
             stage="context",
             tier=None,
@@ -576,6 +603,7 @@ def review_document(
         )
     except Exception as error:  # noqa: BLE001 - one pass's failure shouldn't sink the whole review
         global_context = ""
+        term_glossary = ""
         tier_errors.append(f"Global Context 추출 실패: {error}")
 
     tree = parse_document(doc_id, document_text)
@@ -597,7 +625,7 @@ def review_document(
     if len(active_passes) == 1:
         level, rules, chunks = active_passes[0]
         issues, pass_events, error = _run_pass(
-            level, rules, chunks, doc_id, global_context, document_text, rulebook, screen_llm, confirm_llm
+            level, rules, chunks, doc_id, global_context, term_glossary, document_text, rulebook, screen_llm, confirm_llm
         )
         all_issues.extend(issues)
         events.extend(pass_events)
@@ -613,6 +641,7 @@ def review_document(
                     chunks,
                     doc_id,
                     global_context,
+                    term_glossary,
                     document_text,
                     rulebook,
                     screen_llm,
