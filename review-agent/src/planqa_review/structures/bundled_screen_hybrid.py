@@ -3,10 +3,10 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from planqa_review.dedupe import dedupe_issues
-from planqa_review.document import Chunk, parse_document, resolve_reported_level
+from planqa_review.document import Chunk, DocumentTree, parse_document, resolve_reported_level
 from planqa_review.instrumentation import CallEvent, isolate_client, merge_usage, record_call
 from planqa_review.llm.base import LLMClient
 from planqa_review.pipeline import ReviewResult
@@ -139,7 +139,63 @@ def _verify_false_positives(
     return tuple(verified)
 
 
+# 팀 프레이밍 규칙(Notion "Ver 1/Ver 2 - 프레임 유형 구분", 2026-08-06, 사용자가 Ver2 선택)의
+# MI(정보 누락) 삽입 프레이밍 표를 그대로 구현 — 단어 누락은 그 문장으로, 문장 누락은 해당
+# 소주제(Paragraph 청크) 전체로, 소주제/대주제 누락은 앞뒤 인접 소주제/대주제까지로 넓힌다.
+# 프론트의 object 렌더러는 "주어진 텍스트로 박스 하나"만 그리므로, 별도 프론트 변경 없이도
+# original_text를 넓히는 것만으로 화면에 바로 반영된다(발견5의 RD 두 번째 박스와 달리).
+def _widen_along(chunks: tuple[Chunk, ...], location: str, fallback: str) -> str:
+    index = next((i for i, chunk in enumerate(chunks) if chunk.location == location), None)
+    if index is None:
+        return fallback
+    neighbors = [chunks[i].text for i in (index - 1, index, index + 1) if 0 <= i < len(chunks)]
+    widened = "\n\n".join(text for text in neighbors if text)
+    return widened or fallback
+
+
+def _widen_mi_finding(issue: Issue, tree: DocumentTree) -> Issue:
+    try:
+        level = Level(issue.level)
+    except ValueError:
+        return issue
+    original_text = issue.original_text or ""
+
+    if level is Level.SENTENCE:
+        # A sub-sentence fragment (a word/phrase the model could only point at, not a full
+        # sentence) maps to Notion's "단어 누락 → 문장" row: narrow/promote up to the one
+        # containing sentence and stop there, rather than the whole-paragraph widening below
+        # (which is reserved for when an entire sentence, not just a word, is missing).
+        containing_sentence = next(
+            (s for s in tree.sentences if s.location == issue.location and original_text and original_text in s.text),
+            None,
+        )
+        if containing_sentence is not None and len(original_text) < len(containing_sentence.text):
+            return replace(issue, original_text=containing_sentence.text)
+        paragraph = next((p for p in tree.paragraphs if p.location == issue.location), None)
+        return replace(issue, original_text=paragraph.text) if paragraph is not None else issue
+
+    if level is Level.PARAGRAPH:
+        return replace(issue, original_text=_widen_along(tree.paragraphs, issue.location, original_text))
+
+    if level in (Level.LOGICAL_UNIT, Level.DOCUMENT):
+        return replace(issue, original_text=_widen_along(tree.logical_units, issue.location, original_text))
+
+    return issue
+
+
+def _widen_mi_findings(issues: tuple[Issue, ...], tree: DocumentTree, rulebook: RuleBook) -> tuple[Issue, ...]:
+    return tuple(
+        _widen_mi_finding(issue, tree) if rulebook.category_of(issue.rule_id) == "MI" else issue for issue in issues
+    )
+
+
 _RELATIONAL_CATEGORIES = frozenset({"LG", "LF", "GA"})
+# RD(중복) findings are also inherently tied to a second location (the other copy of the
+# duplicated content) — separate from _RELATIONAL_CATEGORIES because RD stays dispatched at
+# Paragraph tier (unlike LG/LF/GA's Document-tier move) and doesn't get the "actively search
+# the rest of the document" instruction that assumes that wider visibility; this set only
+# gates whether related_location/related_original_text get filled in _confirm_pass.
+_DUAL_LOCATION_CATEGORIES = _RELATIONAL_CATEGORIES | {"RD"}
 
 # Three category mix-ups come up often enough in real usage to call out specifically — the
 # rule text alone doesn't state each category's own one-line definition, and the surface
@@ -203,13 +259,14 @@ _CONFIRM_HYBRID_SYSTEM = (
     "what's wrong (description), explain why it breaks the rule (rationale), and write a "
     "concrete revised version of the text that would fix it (fix_direction) — phrase it as "
     "a suggestion, not a command. Also apply the rule's own exception condition if given; "
-    "set excused=true (with excuse_reason) when it applies. For the LG/LF/GA categories "
-    "specifically, a violation is by definition a relationship error between two locations "
-    "in the document — also name the OTHER location involved (related_location), using the "
-    "same label style as the location you were given, AND quote the exact evidence sentence "
-    "from that other location (related_original_text) the same way you quoted original_text; "
-    "leave both null for every other category, or if no specific second location can be "
-    "identified. For GA/LG/LF "
+    "set excused=true (with excuse_reason) when it applies. For the LG/LF/GA/RD categories "
+    "specifically, a violation is by definition tied to a second location elsewhere in the "
+    "document (the conflicting statement for LG/LF/GA, the other copy of the duplicated "
+    "content for RD) — if you can identify that other location from what you were given, "
+    "name it (related_location) using the same label style as the location you were given, "
+    "AND quote its exact evidence sentence (related_original_text) the same way you quoted "
+    "original_text; leave both null for every other category, or if no specific second "
+    "location can be identified. For GA/LG/LF "
     "specifically, before confirming a candidate, actively search the rest of the document "
     "context you were given for the specific other statement it conflicts with — don't rely "
     "on the screening pass's guess alone; if you can't locate a concrete conflicting "
@@ -391,7 +448,7 @@ def _confirm_pass(
             continue
         related_location = None
         related_original_text = None
-        if rules_by_id[candidate.rule_id].category in _RELATIONAL_CATEGORIES:
+        if rules_by_id[candidate.rule_id].category in _DUAL_LOCATION_CATEGORIES:
             raw_related = values.get("related_location")
             related_location = str(raw_related).strip() or None if raw_related else None
             raw_related_text = values.get("related_original_text")
@@ -577,10 +634,16 @@ def review_document(
         verified_issues = deduped_issues
         tier_errors.append(f"MI/AE 오탐 재검증 실패: {error}")
 
+    try:
+        final_issues = _widen_mi_findings(verified_issues, tree, rulebook)
+    except Exception as error:  # noqa: BLE001 - a framing-widening failure must not drop every finding
+        final_issues = verified_issues
+        tier_errors.append(f"MI 프레이밍 확장 실패: {error}")
+
     return ReviewResult(
         doc_id=doc_id,
         global_context=global_context,
-        issues=verified_issues,
+        issues=final_issues,
         tier_errors=tuple(tier_errors),
         call_events=tuple(events),
     )

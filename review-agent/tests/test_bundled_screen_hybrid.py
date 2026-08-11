@@ -6,10 +6,12 @@ from conftest import ScriptedLLM
 
 from planqa_review.rulebook import parse_rulebook
 from planqa_review.schema import Issue, Level
+from planqa_review.document import parse_document
 from planqa_review.structures.bundled_screen_hybrid import (
     _resolve_quoted_span,
     _verify_ae_finding,
     _verify_mi_finding,
+    _widen_mi_finding,
     review_document,
 )
 
@@ -381,6 +383,93 @@ def test_review_document_leaves_related_original_text_null_for_non_relational_ca
     assert issue.related_original_text is None
 
 
+def test_review_document_fills_related_location_for_rd(rulebook_path):
+    # 발견5: RD(중복)도 LG/LF/GA와 마찬가지로 두 번째 위치를 표현할 수 있어야 한다(항상
+    # 두 곳을 각각 독립적으로 프레임하는 Notion 규칙) — RD는 Paragraph 위계에 그대로 남지만
+    # (실제 dispatch tier는 안 바꿈), 관련 위치 필드는 채워지는지 확인.
+    rulebook = parse_rulebook(rulebook_path)
+    confirm_llm = ScriptedLLM(
+        [{"summary": ""}],
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "verdicts": [
+                        {
+                            "index": 0,
+                            "violated": True,
+                            "original_text": "간단한 목적 설명입니다.",
+                            "description": "d",
+                            "fix_direction": "f",
+                            "excused": False,
+                            "related_location": "2. 배경",
+                            "related_original_text": "두번째 문단입니다.",
+                        }
+                    ]
+                }
+            ],
+        },
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {"candidates": [{"chunk_index": 0, "rule_id": "RD-01", "quoted_text": "간단한 목적 설명입니다.", "reason": "r"}]}
+            ],
+            Level.DOCUMENT: [_EMPTY_CANDIDATES],
+        }
+    )
+
+    result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
+
+    [issue] = result.issues
+    assert issue.rule_id == "RD-01"
+    assert issue.level == "Paragraph"  # RD는 여전히 Paragraph 위계로 dispatch됨(문서 tier 이동 없음)
+    assert issue.related_location == "2. 배경"
+    assert issue.related_original_text == "두번째 문단입니다."
+
+
+def test_widen_mi_finding_promotes_a_sub_sentence_fragment_up_to_its_whole_sentence():
+    # Notion "단어 누락 → 문장" 행 — 인용문이 문장 전체보다 짧으면(단어/구 단위) 그 문장
+    # 하나로만 좁힌다(더 넓은 문단으로는 넓히지 않음).
+    tree = parse_document("DOC-TEST", _DOC)
+    issue = _mi_issue(level="Sentence", location="1. 목적", original_text="목적")
+    widened = _widen_mi_finding(issue, tree)
+    assert widened.original_text == "간단한 목적 설명입니다."
+
+
+def test_widen_mi_finding_widens_a_missing_sentence_to_the_whole_paragraph():
+    # Notion "문장 누락 → 해당 소주제 전체" 행(사용자가 선택한 Ver2) — 인용문이 이미 문장
+    # 전체와 같으면(더 좁히지 않고) 그 문장이 속한 Paragraph 청크 전체로 넓힌다.
+    tree = parse_document("DOC-TEST", _DOC)
+    issue = _mi_issue(level="Sentence", location="1. 목적", original_text="간단한 목적 설명입니다.")
+    widened = _widen_mi_finding(issue, tree)
+    assert widened.original_text == "간단한 목적 설명입니다."  # 이 문서는 문단=문장 1개뿐이라 동일
+
+
+def test_widen_mi_finding_widens_a_missing_paragraph_to_adjacent_paragraphs():
+    tree = parse_document("DOC-TEST", _DOC)
+    issue = _mi_issue(level="Paragraph", location="1. 목적", original_text="간단한 목적 설명입니다.")
+    widened = _widen_mi_finding(issue, tree)
+    assert widened.original_text == "간단한 목적 설명입니다.\n\n두번째 문단입니다."
+
+
+def test_widen_mi_finding_widens_a_missing_logical_unit_and_stays_one_sided_at_document_end():
+    # 문서 끝(마지막 대주제)에서는 앞쪽으로만 넓혀진다("one-sided at document start/end").
+    doc = (
+        "# 문서\n\n## 1. 목적\n\n목적 문단.\n\n## 2. 배경\n\n배경 문단.\n\n## 3. 결론\n\n결론 문단.\n"
+    )
+    tree = parse_document("DOC-TEST", doc)
+    issue = _mi_issue(level="Document", location="3. 결론", original_text="결론 문단.")
+    widened = _widen_mi_finding(issue, tree)
+    assert widened.original_text == "배경 문단.\n\n결론 문단."
+
+
+def test_widen_mi_finding_leaves_the_issue_unchanged_when_location_has_no_matching_chunk():
+    tree = parse_document("DOC-TEST", _DOC)
+    issue = _mi_issue(level="Paragraph", location="존재하지 않는 위치", original_text="x")
+    widened = _widen_mi_finding(issue, tree)
+    assert widened.original_text == "x"
+
+
 def test_screen_and_confirm_prompts_instruct_active_cross_location_search(rulebook_path):
     rulebook = parse_rulebook(rulebook_path)
     confirm_llm = ScriptedLLM(
@@ -488,8 +577,11 @@ def test_review_document_corrects_original_text_when_confirm_quotes_the_heading_
 
     result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
 
+    # 발견6(MI 프레이밍 확장)이 이 MI 이슈(Paragraph 위계)를 인접 문단까지 추가로 넓히므로,
+    # 여기서는 발견3 자체(헤더 라벨이 아니라 실제 본문으로 교정됐는지)만 substring으로 확인.
     [issue] = result.issues
-    assert issue.original_text == "간단한 목적 설명입니다."
+    assert "간단한 목적 설명입니다." in issue.original_text
+    assert "1. 목적" != issue.original_text
 
 
 def test_review_document_drops_mi_false_positive_but_keeps_other_issues(rulebook_path):
