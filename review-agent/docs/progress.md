@@ -1306,3 +1306,38 @@ Sonnet으로 돌리기 전에, 콜분리 계열(`paragraph_verdict`/`category_fe
 
 - plan 파일의 "실행 순서" 1~10번 그대로 진행 — 아직 코드 한 줄도 안 건드림.
 - eval-agent 재채점 후 전체적인 실험결과 보고서 작성.
+
+## 2026-08-11 — Sentence 위계 강등 버그 수정 (plan 실행 7단계)
+
+### Done
+
+- `document.py::resolve_reported_level`: 청크보다 좁은 위계("강등") 주장을 무조건 거부하던
+  로직을 수정 — 이제 `claimed_rank > chunk_rank`(강등)일 때도 `(claimed_level,
+  chunk_location)`을 그대로 인정한다. 위치 문자열은 안 바꿈: `_split_sentences`가 이미
+  Sentence 청크의 `location`을 부모 Paragraph와 동일하게 만들어두기 때문에 강등 시
+  별도 조정이 필요 없음. 승격(promotion)/동일 위계 로직은 그대로 유지.
+  이 함수는 `document.py` 하나에만 있고 모든 structure(`bundled_screen_hybrid` 포함
+  15개 전부)가 공유하므로, 이 한 곳 수정으로 전체가 동시에 수정됨.
+  근거: 승격은 청크 밖의 것에 대한 주장(신뢰하려면 실제로 넓은 시야가 필요)이지만 강등은
+  청크 **안에서** 범위를 좁히는 주장이라 `original_text`가 그 청크의 실제 인용문인 이상
+  그 자체로 근거가 있음 — 무조건 거부는 golden의 AE-03/DOC-003(level=Sentence, location은
+  문단급 라벨 그대로)류 케이스를 구조적으로 영원히 못 맞히게 만드는 버그였음.
+- `bundled_screen_hybrid.py`의 `_CONFIRM_HYBRID_SYSTEM` 프롬프트에 강등 사례 지시 추가:
+  청크 안의 특정 문장 하나에만 해당하는 문제면 `"level": "Sentence"`로 표시하라고 명시
+  (기존엔 "더 넓은 범위"만 안내했음).
+- 테스트: `test_document.py`에 강등 허용 테스트 2개(1단계, 2단계 강등) 추가하고 기존
+  "narrower claim ignored" 테스트는 이름과 기대값을 뒤집어서 교체. `test_bundled_screen_
+  hybrid.py`에 AE-03/DOC-003류 시나리오(Paragraph 청크 + confirm이 "level": "Sentence"
+  반환)가 실제로 `issue.level == "Sentence"`로 나오는지 확인하는 엔드투엔드 테스트 추가.
+- 240/240 테스트 통과(239 + 신규 1, 기존 테스트 하나는 교체).
+- 커밋: `f813288` "fix: allow Sentence-level demotion within a wider chunk". push 안 함.
+- (부수 발견) `.venv`의 editable install이 monorepo 구조 이전 경로를 가리키고 있어서
+  `services/review-agent`(다른 브랜치의 동명 패키지 `planqa-review`)를 설치했더니 이
+  브랜치의 `review-agent/`가 깨짐 — `pip install -e review-agent`로 다시 잡음. 브랜치를
+  오갈 때마다 이 재설치가 필요할 수 있음(하나의 `.venv`를 두 개의 호환 안 되는 레이아웃이
+  공유하는 구조라서).
+
+### Next
+
+- eval-agent 쪽 재채점(`feature/eval-agent`, 이미 완료된 결정론적 매칭/Level 부분점수
+  구현)으로 기존 `predictions.json` 재채점 → 전체적인 실험결과 보고서 작성.
