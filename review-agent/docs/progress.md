@@ -1705,3 +1705,40 @@ Sonnet으로 돌리기 전에, 콜분리 계열(`paragraph_verdict`/`category_fe
 
 - 실행순서 14(eval-agent 재채점 — `predictions.json`을 `feature/eval-agent` 워크트리로
   넘겨서 결정론적 스코어러로 재확인, 발견8의 참조-예외 영향도 재확인)로 계속.
+
+## 2026-08-12 — 실행순서 14·15: eval-agent 재채점 — recall이 표본 확대에 못 버팀
+
+### Done
+
+- `eval-agent-latest` 워크트리(`C:/Users/HYESEO/Desktop/eval-agent-latest/tools/
+  eval-agent`)에 임시 venv 구성 후 `planqa-eval evaluate --predictions ...`로 결정론적
+  재채점 실행(Gemini flash-lite 무료 티어, Anthropic $7 예산과 무관).
+- **실행 중 eval-agent의 기존 알려진 버그를 다시 만남**: `_scope_to_predicted_docs`가
+  predictions.json에 등장하는 doc_id만 골든 스코프에 넣는데, 0건 지적한 문서는
+  predictions.json에 그 doc_id가 안 남아서 "미검토"로 오인됨 — 20문서 중 14문서가
+  0건이라 자동 스코핑하면 그 문서들의 골든(DOC-001 LG-05 포함)이 통째로 빠짐(이미
+  `results_2026-08-11_deterministic_rescore.md`에 "이번 세션 범위 밖"으로 기록돼 있던
+  문제, eval-agent 소스 문제라 이번에도 수정 안 함 — 스코핑 함수만 몽키패치해서 20문서
+  전체로 강제한 별도 스크립트로 정확한 수치를 냄).
+- **결과(정확한 20문서 스코프)**: relaxed recall **5%(1/19)**, precision 50%(1/2),
+  strict 0%/0%, valid_but_unlabeled 9건. **2026-08-11 문서의 5문서·골든6건 기준
+  recall 50%(3/6)에서 대폭 하락** — 관계형 카테고리(GA×5/LG×1/TM×2/TC×1=9건)가 전부
+  미탐지. 이번 세션 발견1–8은 전부 오탐 억제/표현 개선 위주라 recall을 낮출 이유가
+  없어서, 원인은 "골든 6건 표본이 너무 작아 50%가 통계적으로 불안정했다"로 판단 —
+  표본을 넓히니 실제 재현율(관계형 카테고리는 특히 낮음)이 드러난 것으로 봄.
+- 개별 사례 검토로 새로 발견: (1) AE-01↔AE-03 카테고리 경계 혼동(발견1/4 스코프 밖,
+  새 후보), (2) golden의 위계 라벨링("2-1~2-4 전반" 같은 압축 표기)과 review-agent의
+  실제 라벨 형식이 근본적으로 안 맞아서 review-agent가 정확히 찾아도 점수화가 안 되는
+  구조적 문제, (3) `_widen_mi_finding`(발견6)이 위치 문자열 불일치 시 조용히 no-op하는
+  사례 1건 실전에서 확인(DOC-011 MI-07, 19자로 안 넓혀짐).
+- 결과 보고서 작성: `docs/experiments/results_2026-08-12_bundled_hybrid_20doc_
+  revalidation.md` — 비용($6.33/$7), 발견1–8 구현 현황, recall 하락의 핵심 발견,
+  개별 사례, 알려진 한계, 다음 단계 제안 전부 포함.
+
+### Next
+
+- PR #33(`expr/review-agent/`로 이전) 머지 여부는 사용자 최종 승인 대기 — 계획대로
+  이번 세션에서 머지하지 않음.
+- (제안, 다음 세션) 관계형 카테고리 recall을 "알려진 한계"에서 우선순위 문제로
+  격상, eval-agent 스코핑 버그를 팀에 이슈로 공유, `_widen_mi_finding` 실패를
+  `tier_errors`에 기록하도록 보강.
