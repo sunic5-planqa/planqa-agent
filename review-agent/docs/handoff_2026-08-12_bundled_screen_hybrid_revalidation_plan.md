@@ -1,94 +1,74 @@
-# 인수인계 — bundled_screen_hybrid 20문서 재검증 + 정확도 개선 (2026-08-12, 최종)
+# 인수인계 — bundled_screen_hybrid 20문서 재검증 + 정확도 개선 (2026-08-13, 완료 후 최종)
 
-> 이전 버전(같은 파일명, compact 직전 작성)은 미해결 질문이 있는 중간 상태였다. 그
-> 이후 대화에서 실사용자 피드백 13개, 팀 GitHub 최신 PR(#30/#32/#33), 팀 프레이밍
-> 규칙 Notion 문서 2건을 추가로 반영해서 계획이 크게 확장·확정됐고, 사용자가
-> **ExitPlanMode로 최종 승인**했다. 이 문서는 그 최종 상태를 기록한다.
+> 이 문서의 이전 버전들은 "계획 승인 완료, 실행 전" 상태를 기록한 것이었다. 이번
+> 버전은 **실행순서 1–15가 전부 끝난 뒤의 최종 상태**를 기록한다 — 남은 건 PR #33
+> 머지 여부 사용자 승인 하나뿐이다.
 
-## 지금 상태
+## 지금 상태 — 계획 실행 완료
 
-- **계획 승인 완료, 코드 실행은 아직 시작 안 함.** 지금까지 이 세션에서 실행한 실제
-  코드/커밋은 없음 — 전부 조사·설계·plan 파일 갱신이었다.
-- 승인된 계획 전문: `C:\Users\HYESEO\.claude\plans\replicated-jingling-pudding.md`
-  (git 추적 아님) 및 그 사본 `review-agent/docs/plan_2026-08-12_bundled_screen_
-  hybrid_revalidation.md`(이번에 새로 커밋, git 추적됨 — **이게 실행용 원본으로
-  더 안전**, plan 파일이 나중에 다른 작업으로 재사용될 수 있음).
-- 사용자가 실행 도중 자리를 비울 예정이라 **자율 실행 경계**가 계획에 명시돼 있음
-  (아래 요약). 이 경계 안에서는 허락 없이 계속 진행한다.
+- **실행순서 1–15 전부 완료.** 발견1–8 코드 구현+테스트(300+ 통과)+실제 20문서
+  Sonnet5 실행($6.33/$7)+eval-agent 재채점+결과 보고서 작성까지 끝났다.
+- 결과 보고서: `review-agent/docs/experiments/results_2026-08-12_bundled_hybrid_
+  20doc_revalidation.md` — **핵심 결론: recall이 5문서·골든6건 기준 50%에서
+  20문서·골든19건 기준 5%로 대폭 하락.** 관계형 카테고리(GA/LG/TM/TC, "두 지점을
+  비교해야 하는 판정") golden 9~10건이 전부 미탐지 — 이번 세션에서 가장 중요한 발견.
+- 실행 로그 전체: `review-agent/docs/progress.md`의 2026-08-12 날짜 섹션들(실행순서
+  2번부터 15번까지 순서대로 기록됨). 각 발견의 구현 커밋 해시도 거기 다 있음.
+- 실 실행 결과물(코드 추적 안 됨, 로컬 파일만): `review-agent/outputs/experiments/
+  bundled_hybrid_20doc_revalidation/` — 문서별 review.json/md, predictions.json,
+  summary.json/md.
 
-## 자율 실행 경계 (요약, 원문은 계획 문서 최상단)
+## 실행 중 발견한 예상 밖 이슈 (전부 문서화됨)
 
-**승인 없이 진행**: 실행순서 2–11(코드 작업 전부, 로컬 커밋), 12(최소 비용 검증),
-13(전체 20문서 Batch API 실행, 약 $7), 14(eval-agent 재채점), 15(보고서 작성 —
-형식 관련 소소한 결정은 직접 선택 후 이유 기록).
+1. **Batch API 3단계 통합을 포기함** — global_context 결과가 screen 프롬프트에
+   들어가는데, 배치 안 요청은 서로 독립적이어야 해서 설계가 안 맞았음. 프리미티브
+   (`llm/anthropic.py`의 submit/poll/cancel/fetch_batch_results)는 테스트까지 구현
+   했지만 이번 실행에는 안 씀 — `resumable_run.py`의 동기+병렬 경로로 대체.
+2. **cost guard 버그** — screen(Gemini 무료)과 confirm(Sonnet 유료) 토큰을 합쳐서
+   단가를 매기던 버그를 실행 중 발견/수정(`b892ba3`). 이후 웨이브 단위 실사용 재확인
+   으로 한 번 더 강화(`82a8fdb`).
+3. **eval-agent의 기존 스코핑 버그 재확인** — `_scope_to_predicted_docs`가 "0건
+   지적"과 "미검토"를 구분 못 함. 20문서 중 14문서가 0건이라 자동 스코핑하면 recall이
+   인위적으로 부풀려짐(17% vs 정확히 계산한 5%). eval-agent 소스 문제라 이번에도
+   수정 안 하고 몽키패치로 우회해서 정확한 수치만 냄.
 
-**승인 없이는 안 함**: git push / PR 생성·머지(PR #33 포함, 마지막에 확인), `main`/
-`dev` 브랜치 손대기, 이번에 다루지 않기로 한 항목(LG/GA 재현율 등) 임의 추가.
+## 계획 실행 완료 이후 — 사용자의 후속 요청(결과 해석/발표 자료 준비)
 
-**비용 상한 — 절대 규칙**: $7, 여유 없음. 매 단계(스모크 테스트/screen 배치/confirm
-배치/MI·AE재검증 배치) **제출 전에** "지금까지 실사용 비용 + 이번 단계 예상 비용"을
-계산해서 합이 $7을 넘을 것 같으면 그 단계를 제출하지 않고 멈춘다. 배치는 제출 후엔
-처리된 만큼 과금되므로 사후 감시가 아니라 사전 추정으로 막아야 한다 — 이 가드를
-실행순서 11(실행 인프라 구현) 때 코드로 반드시 넣을 것.
+계획 자체는 끝났지만, 이후 대화에서 사용자가 이 결과를 **팀 발표/베타테스트 슬라이드
+자료로 정리**하는 걸 도와달라고 해서 아래를 진행함(전부 review-agent 코드 변경 없음,
+분석·설명·아티팩트 제작만):
 
-**시간 상한(2026-08-12 재조정, 5시간→3시간 축소)**: Batch API 3단계(screen→confirm→
-MI·AE재검증) 전체를 합쳐 3시간(실질 2시간40분=160분 + 20분 여유). 각 단계 진입
-전에 `min(45분, 남은시간 − 남은단계수×1시간)`으로 그 단계의 배치 타임아웃을 동적으로
-계산(동기폴백 예상 1시간/단계는 실측 기반 값이라 축소 없이 유지) — 예: 1단계
-40분, 2단계 45분, 3단계 45분. 도달하면 배치를 cancel API로 명시적으로 취소하고
-동기+병렬(`ThreadPoolExecutor`) 폴백으로 전환한다. 예산이 5시간일 때보다 훨씬
-빡빡해져서 배치가 조금만 늦어도 곧바로 폴백으로 넘어가는 게 정상 동작이다.
+- **아티팩트 3개 게시**(전부 이 대화 세션에서 게시, URL은 `Artifact` 도구의
+  `action: "list"`로 재조회 가능):
+  1. "20문서 재검증 결과" — 요약 보고서(recall 50%→5% 강조)
+  2. "문서별 검토 대조표" — DOC-001~020 전체를 찾은 것/golden/소요시간/토큰/비용별로
+     대조 (문서당 평균 비용 $0.317, 전체 $6.33)
+  3. "피드백별 해석과 통찰" — 해결(3)/부분적해결(1)/미해결(2)로 재분류, "두 지점을
+     비교해야 하는 판정"이 전멸했다는 걸 하나의 큰 줄기로 통합해서 정리
+- **실 Sonnet5 API 호출 여부를 사용자가 재확인 요청** → `client.messages.with_raw_
+  response`로 실시간 호출 1회 실행, `message.id`/`request-id`/`anthropic-
+  organization-id`(`4a24715b-dd96-4cac-8682-50e008cafe07`) 등을 근거로 실제 호출임을
+  증명. 사용자가 콘솔에 사용량이 안 보인다던 문제는 **콘솔에서 다른 조직(workspace)을
+  보고 있을 가능성**으로 결론(이 API 키가 속한 조직 ID를 대사하도록 안내함).
+- **eval-agent 채점 방식 설명 + 사람 vs AI 비교 방법론 컨설팅** — 사용자가 별도로
+  진행 중인 "정답지(전량형, 이 문서의 모든 문제를 담음) 대비 인간 리뷰어 vs AI 에이전트"
+  비교 작업(베타테스트 슬라이드용)을 위해 recall/precision 공식, 오탐(FP 개수)/
+  과탐률(1−precision) 계산법을 설명함. **이건 review-agent 저장소 밖의 별도 문서
+  (`카카오톡 받은 파일/사진후기페이지_PRD_Test Doc...md`)에 대한 새 비교 작업으로,
+  이번 20문서 재검증과는 별개 — 후속 세션에서 이 주제가 이어지면 이 컨텍스트를
+  참고할 것.**
 
-**계획에 없는 진짜 블로커**: 멈추지 말고 가장 보수적인 선택 후 근거를 커밋 메시지/
-`progress.md`에 남기고 계속.
+## 남은 것 — 딱 하나
 
-## 실행 순서 다음 액션 (지금부터 시작할 지점)
+**PR #33(`feature/review-agent`를 `expr/review-agent/`로 이전, 팀원 kayo2e 제안)
+머지 여부 — 사용자 최종 승인 대기 중.** 계획대로 이번 세션에서 사용자 승인 없이는
+머지하지 않았음. 다음에 이 대화가 이어지면 이것부터 물어볼 것.
 
-1. ~~계획을 저장~~ — 완료(`review-agent/docs/plan_2026-08-12_bundled_screen_
-   hybrid_revalidation.md`, 이번 커밋).
-2. **다음: PR #30 포팅** — `packages/planqa-schemas`의 `Issue`에
-   `related_original_text: str | None`(LG/LF/GA만) 추가, `bundled_screen_hybrid.py`
-   confirm 프롬프트가 관련 위치 원문 인용도 요청하도록 수정, `diff_report.py` 출력에
-   노출. PR #30 원문: https://github.com/sunic5-planqa/planqa-agent/pull/30
-3. 발견8 포팅 — `verifier.py`의 `_CITATION`을 `_CITATION_DOC_CODE`+`_CITATION_NATURAL`
-   로 분리(PR #32 diff 그대로 재현 가능, 정규식:
-   ``「[^」]{2,40}」\s*\d+(?:-\d+)?[^.\n]{0,40}?(?:따른다|따릅니다|해당하는 경우|참조 표기|참고|참조)``).
-   review-agent(`review-agent/src/planqa_review/verifier.py`)와 eval-agent
-   (`feature/eval-agent` 브랜치/워크트리의 `tools/eval-agent/src/planqa_eval/
-   verifier.py`) 둘 다. PR #32: https://github.com/sunic5-planqa/planqa-agent/pull/32
-4. 이후 계획 문서의 "실행 순서" 4–15번 그대로.
+## 그 외 참고
 
-## 이번 세션에서 새로 확정된 핵심 사실 (재조사 불필요)
-
-- **eval-agent 워크트리 위치**: `C:/Users/HYESEO/Desktop/eval-agent-latest`
-  (detached HEAD) — `feature/eval-agent` 관련 작업은 여기서.
-- **저장소 자체가 `sunic5-planqa/planqa-agent`의 로컬 클론**(`origin` remote 확인됨,
-  놀랍지만 사실 — `git fetch origin`으로 팀 PR을 바로 조회 가능).
-- **팀 프레이밍 규칙(Notion, 8월 6일자)**: 사용자가 md 파일 2개를 직접 공유함
-  (`Ver 1 - QA별 프레임 유형 구분`, `Ver 2 - Edit 행위별 프레임 유형 구분`).
-  LG/LF/GA 프레임 타입은 **Ver1(항상 범위)로 확정**, MI "문장 하나 누락" 프레이밍은
-  **Ver2(해당 소주제 전체)로 확정** — 사용자가 직접 선택. 원본 파일 경로:
-  `C:\Users\HYESEO\Desktop\혜서\suni\frozen_files\`.
-- **프론트엔드 실제 상태 확인됨**(`sunic5-planqa/planqa` repo, `extension/src/`):
-  백엔드 `qa_jobs.py`의 `_frame_type()`은 이미 Notion 규칙대로 구현돼 있지만,
-  `issueOverlay.ts`는 아직 object(단일 박스) 방식으로만 그림 — range/insert_range를
-  실제로 다르게 그리는 로직은 없음. **발견6(MI)은 이 사실 때문에 review-agent만
-  고쳐도 지금 바로 시각적 효과가 나지만, 발견5(RD)는 프론트 갱신이 따로 필요** —
-  결과 보고서에 반드시 이 구분을 명시할 것.
-- **하이쿠(Haiku) 관련**: 우리 review-agent/eval-agent 어디에도 실사용 없음(테스트
-  코드 예시뿐). 실사용은 백엔드(`sunic5-planqa/planqa`)의 `qa_jobs.py`(QA 엔진
-  스크리닝, `settings.sunnic_haiku_model`)와 `issues.py`(이슈 저장 시 유사도 체크)
-  두 곳 — 이건 우리 코드가 아니라 팀 백엔드 얘기라 이번 계획 범위 밖, 사용자가
-  팀원한테 별도로 문의할 사항으로 남겨둠.
-- **Batch API 실제 소요시간 조사**: 공식 SLA 24시간은 상한선, 실제로는 5,000건
-  이하 배치는 1–2시간 내가 흔함, 다만 진행률 표시가 없어 4시간+ 걸린 프로덕션
-  사례도 보고됨([Enterprise DNA](https://enterprisedna.co/resources/guides/guide-anthropic-batch-api/)).
-  우리 배치는 20문서 규모라 낙관적이지만 이 불확실성 때문에 동적 타임아웃+취소+
-  폴백을 필수로 설계함.
-
-## 남은 미해결 사항
-
-- 이전 버전 문서에 있던 "Batch API 할지 말지" 질문은 **완전히 해결됨** — 사용자가
-  "코드 변경은 네가 하는 거니 트레이드오프 논리가 안 맞음, 가능하면 하라"고 확정,
-  Batch API 포함이 최종 결정.
-- 남은 건 순수 실행뿐 — 위 "실행 순서 다음 액션"부터 시작하면 됨.
+- `feature/review-agent`는 여전히 로컬 전용 — 이번 세션의 모든 커밋(발견1–8, 캐싱,
+  실행 인프라, 문서화)이 push 안 된 상태로 남아 있음. push/PR은 여전히 명시적 요청
+  시에만.
+- `eval-agent-latest` 워크트리(`C:/Users/HYESEO/Desktop/eval-agent-latest`)의 발견8
+  포팅(정규식 수정)은 detached HEAD라 **여전히 커밋 안 하고 워킹트리에만 남겨둠**
+  (의도된 선택, 이유는 progress.md 2026-08-12 실행순서 3 항목 참고).
