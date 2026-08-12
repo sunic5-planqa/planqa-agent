@@ -1671,3 +1671,37 @@ Sonnet으로 돌리기 전에, 콜분리 계열(`paragraph_verdict`/`category_fe
 ### Next
 
 - 실행순서 13(나머지 18문서 실행 — `run_resumable`이 DOC-001/003을 자동 스킵)로 계속.
+
+## 2026-08-12 — 실행순서 13: 나머지 18문서 실 실행 완료 ($6.33, $7 상한 안)
+
+### Done
+
+- 나머지 18문서(DOC-002/004–020, DOC-001/003은 스모크 테스트 결과 재사용)를
+  `bundled_screen_hybrid`로 실제 Sonnet5(confirm)+Gemini flash-lite(screen)로 실행.
+  20문서 전체 confirm 토큰 합계 기준 실사용 **$6.33**(상한 $7 안, 여유 ~$0.67) — 크래시/
+  에러 0건, 3시간 데드라인·웨이브 가드 전부 정상 대기 없이 통과(총 소요 몇 분 수준).
+  결과: `outputs/experiments/bundled_hybrid_20doc_revalidation/`(문서별 review.json/md +
+  summary.json/md + predictions.json).
+- **review-agent 자체 내장 `scoring.py` 채점 결과는 tp=0, fp=11, fn=19**로 매우 낮게
+  나왔지만, 개별 사례 확인 결과 이건 회귀가 아니라 **이 스코어러의 위치-문자열
+  substring-overlap 방식이 golden의 압축 표기("2-1~2-4 전반")와 review-agent의 실제
+  location 라벨("2. 문의 유형별 처리 기준 > 2-1. 상품 문의")을 일치시키지 못하는
+  구조적 한계** — 예: DOC-006에서 golden은 AE-01/AE-03을 "2-1~2-4 전반"(Logical Unit)
+  에 기대했는데 실제로는 정확히 같은 rule_id로 더 좁은 위치(Paragraph, 2-1/2-3)를
+  찾아냈음에도 문자열이 안 겹쳐서 fp+fn으로 잡힘. **과거 실험(`phase1_stage_count_
+  sonnet/cell3`)도 같은 스코어러로 tp=1/fp=25/fn=5였던 걸 확인** — 이 스코어러 자체가
+  원래 이 정도로 엄격했다는 선례, 이번에 새로 생긴 문제 아님. **진짜 채점은 실행순서
+  14(eval-agent 재채점)에서** 별도의(더 관대한) 매칭 로직으로 다시 함 — 이 review-
+  agent 내장 스코어러는 구조 비교 실험(①②③)용으로 만들어진 거라 이번 20문서 재검증의
+  최종 수치로 쓰지 않음.
+- combined `predictions.json`은 `write_experiment_report`를 그대로 쓰지 않고 필요한
+  부분만 직접 작성 — 그 함수가 이미 완료된 문서의 `review.json`도 다시 씀, 근데
+  resumable 복원 경로(`_load_saved_document_run`)는 `global_context`를 저장 안 해서
+  ""로 복원되므로 그대로 다시 쓰면 이미 저장된 global_context 텍스트가 사라짐. 그래서
+  summary.json/summary.md/predictions.json만 새로 쓰고 문서별 review.json/md는
+  그대로 보존.
+
+### Next
+
+- 실행순서 14(eval-agent 재채점 — `predictions.json`을 `feature/eval-agent` 워크트리로
+  넘겨서 결정론적 스코어러로 재확인, 발견8의 참조-예외 영향도 재확인)로 계속.
