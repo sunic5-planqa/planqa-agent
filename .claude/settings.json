@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-protected-push.sh\"",
+            "statusMessage": "브랜치 보호 확인 중..."
+          }
+        ]
+      }
+    ]
+  }
+}
