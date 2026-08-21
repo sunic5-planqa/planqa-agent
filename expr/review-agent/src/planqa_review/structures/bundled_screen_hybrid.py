@@ -66,7 +66,11 @@ _MI_VERIFY_SYSTEM = (
     "actually stated elsewhere in the document, because the agent's own review only saw one "
     "narrow chunk of it) has been observed live in production. You will be given the FULL "
     "document text and the agent's claim. Re-read the ENTIRE document carefully, not just "
-    "whatever section the agent focused on, before deciding.\n"
+    "whatever section the agent focused on, before deciding. This check has been over-"
+    "correcting in practice, throwing out real findings — only answer actually_missing=false "
+    "when you can point to the specific sentence elsewhere in the document that clearly states "
+    "the missing information; if you're not confident, or the closest match is only loosely "
+    "related, keep actually_missing=true.\n"
     'Respond with JSON only: {"actually_missing": <bool>, "reason": "<one short sentence>"}'
 )
 
@@ -80,7 +84,11 @@ _AE_VERIFY_SYSTEM = (
     "actor implied by a system-wide policy stated elsewhere per AE-04's exception). You will "
     "be given the FULL document text and the agent's claim. Re-read the ENTIRE document "
     "carefully, not just whatever section the agent focused on, before deciding whether the "
-    "flagged text is genuinely ambiguous in context.\n"
+    "flagged text is genuinely ambiguous in context. This check has been over-correcting in "
+    "practice, throwing out real findings — only answer actually_ambiguous=false when you can "
+    "point to the specific sentence elsewhere in the document that clearly resolves the "
+    "ambiguity; if you're not confident, or the closest match is only loosely related, keep "
+    "actually_ambiguous=true.\n"
     'Respond with JSON only: {"actually_ambiguous": <bool>, "reason": "<one short sentence>"}'
 )
 
@@ -91,6 +99,9 @@ _AE_VERIFY_SYSTEM = (
 # 직접 못 고쳐서 qa_jobs.py에 우회로 추가했지만, 여긴 소스를 직접 소유하므로 정식으로 구현).
 # MI/AE만 검증하는 이유: 이 둘만 "문서 전체를 봐야 판단 가능한 예외조건"을 갖고 있고(AE-01/
 # AE-04의 "다른 곳에 정의/참조되면 예외"), 모든 카테고리에 걸면 비용/시간이 크게 늘어난다.
+# 2026-08-21: 백엔드 qa_jobs.py에 남아있던 같은 검증(우회 구현)과 여기 것이 이중으로 돌면서
+# 과탐지 방지가 의도보다 훨씬 공격적으로 동작하는 게 확인돼, 백엔드 쪽은 제거하고 여기 프롬프트는
+# "명확한 근거를 못 찾으면 원래 판정을 유지하라"는 방향으로 완화했다(로직 구조는 그대로).
 def _verify_mi_finding(document_text: str, issue: Issue, llm: LLMClient) -> bool:
     prompt = (
         f"Full document:\n{document_text}\n\n"
@@ -276,7 +287,11 @@ _CONFIRM_HYBRID_SYSTEM = (
     "violate: quote the exact evidence sentence from the document (original_text), state "
     "what's wrong (description), explain why it breaks the rule (rationale), and write a "
     "concrete revised version of the text that would fix it (fix_direction) — phrase it as "
-    "a suggestion, not a command. Also apply the rule's own exception condition if given; "
+    "a suggestion, not a command. Write fix_direction in plain, jargon-free Korean a "
+    "non-technical business reader can follow at a glance — no rule-code references, no "
+    "review-jargon (e.g. don't say things like '정합성을 맞추세요' when you can just say what "
+    "specific words to change) — keep it to one short, concrete sentence. Also apply the "
+    "rule's own exception condition if given; "
     "set excused=true (with excuse_reason) when it applies. For the LG/LF/GA/RD categories "
     "specifically, a violation is by definition tied to a second location elsewhere in the "
     "document (the conflicting statement for LG/LF/GA, the other copy of the duplicated "

@@ -1742,3 +1742,26 @@ Sonnet으로 돌리기 전에, 콜분리 계열(`paragraph_verdict`/`category_fe
 - (제안, 다음 세션) 관계형 카테고리 recall을 "알려진 한계"에서 우선순위 문제로
   격상, eval-agent 스코핑 버그를 팀에 이슈로 공유, `_widen_mi_finding` 실패를
   `tier_errors`에 기록하도록 보강.
+
+## 2026-08-21 — MI/AE 과탐지 검증 완화 + 수정 제안 문구 쉽게
+
+팀 역할분담(혜서 담당) 중 "간단한 것부터" 3개 작업 중 review-agent 쪽 2개.
+
+- **MI/AE 과탐지 검증 완화**: `_MI_VERIFY_SYSTEM`/`_AE_VERIFY_SYSTEM` 프롬프트에 "명확한
+  근거 문장을 못 찾으면 원래 판정(있다/모호하다=true)을 유지하라"는 지시를 추가했다.
+  근본 원인은 백엔드(`sunic5-planqa/planqa`)의 `qa_jobs.py`에 review-agent와 같은 목적의
+  MI/AE 재검증이 우회 구현으로 남아 있어서 review_document() 결과에 대해 독립적으로 한 번
+  더 같은 판정을 내리는 이중 검증이었던 것 — 그 중복 코드는 백엔드 쪽에서 별도 커밋으로
+  삭제했다(`fix: remove duplicate MI/AE FP re-verification from qa_jobs`, 로컬 커밋,
+  push는 별도 확인 후). 여기 로직 구조(`_verify_mi_finding`/`_verify_ae_finding`/
+  `_verify_false_positives`)는 그대로 두고 프롬프트만 완화했다 — 완전 제거는 PR #28/#55가
+  고쳤던 narrow-context 오탐 버그를 되살릴 위험이 있어 보류.
+- **수정 제안(fix_direction) 문구 쉽게**: `_CONFIRM_HYBRID_SYSTEM`에 "전문 용어 없이
+  비전문가도 바로 이해할 수 있는 짧고 구체적인 한 문장으로 쓰라"는 지시를 추가했다.
+- 검증: 전체 테스트 301개 그대로 통과(프롬프트 문구만 바뀌어서 스텁 기반 테스트에 영향 없음).
+
+### Next
+
+- 백엔드 중복 제거 + 이번 프롬프트 완화가 실제로 MI/AE 노출 개수를 얼마나 회복시키는지
+  재검증(20문서 재검증 등) 필요 — 아직 측정 안 됨.
+- 이 브랜치(`fix/soften-fp-verification`)는 커밋까지만 진행, push는 사용자 확인 후 진행.
