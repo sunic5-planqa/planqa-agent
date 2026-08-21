@@ -7,7 +7,7 @@
 # 이건 보안 경계가 아니라 실수 방지용이라 상관없음.
 ALLOWED_EMAILS=(
   "gy3216@naver.com"   # 가영
-  # "혜서_이메일@example.com"  # 혜서 — 확인되면 채우기
+  "potterhead0402@naver.com"  # 혜서
 )
 user_email=$(git config user.email 2>/dev/null)
 for e in "${ALLOWED_EMAILS[@]}"; do
