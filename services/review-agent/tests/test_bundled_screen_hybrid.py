@@ -273,6 +273,116 @@ def test_screen_and_confirm_prompts_instruct_active_cross_location_search(rulebo
     assert "actively search" in confirm_system
 
 
+def _xdc_rulebook(tmp_path):
+    from planqa_schemas.rulebook import parse_rulebook
+
+    path = tmp_path / "xdc_rulebook.md"
+    path.write_text(
+        "## 1. 타 문서 확정사항 불일치 Cross-Document Consistency\n\n"
+        "| **Rule ID** | **정의** | **예외 조건** |\n"
+        "| --- | --- | --- |\n"
+        "| XDC-01 | 동일 정책의 확정 사항은 참고문서와 일치해야 한다. | - |\n",
+        encoding="utf-8",
+    )
+    return parse_rulebook(path)
+
+
+# 타문서와의_정합성_룰북_Section1_후보매처_보충본.md §1-7의 예시(현재 문서 7일 vs 참고문서
+# 14일)를 그대로 골든 케이스로 씀.
+def test_review_document_flags_xdc_conflict_against_reference_document(rulebook_path, tmp_path):
+    rulebook = parse_rulebook(rulebook_path)
+    xdc_rulebook = _xdc_rulebook(tmp_path)
+    current_doc = "# 반품 정책\n\n## 1. 신청 기한\n\n단순 변심 | 상품 수령일로부터 7일 이내\n"
+    reference_doc = "# 반품 정책 (참고)\n\n## 1. 신청 기한\n\n신청 기한: 상품 수령일로부터 14일 이내\n"
+
+    reference_decision_response = {
+        "decision_records": [
+            {
+                "chunk_index": 0,
+                "quote": "신청 기한: 상품 수령일로부터 14일 이내",
+                "policy_subject": "반품",
+                "attribute": "신청 기한",
+                "value": "14",
+                "unit": "일",
+                "time_basis": "상품 수령일",
+                "canonical_terms": ["반품", "신청 기한", "14일"],
+            }
+        ]
+    }
+    confirm_llm = ScriptedLLM(
+        [reference_decision_response, {"summary": ""}],
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "verdicts": [
+                        {
+                            "index": 0,
+                            "violated": True,
+                            "rule_id": "XDC-01",
+                            "description": "신청 기한이 다름",
+                            "rationale": "현재 문서는 7일, 참고문서는 14일",
+                            "fix_direction": "14일로 정정",
+                            "excused": False,
+                            "difference_type": "value",
+                        }
+                    ]
+                }
+            ],
+        },
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "candidates": [],
+                    "decision_records": [
+                        {
+                            "chunk_index": 0,
+                            "quote": "단순 변심 | 상품 수령일로부터 7일 이내",
+                            "policy_subject": "반품",
+                            "attribute": "신청 기한",
+                            "value": "7",
+                            "unit": "일",
+                            "time_basis": "상품 수령일",
+                            "canonical_terms": ["반품", "신청 기한", "7일"],
+                        }
+                    ],
+                }
+            ],
+            Level.DOCUMENT: [_EMPTY_CANDIDATES],
+        }
+    )
+
+    result = review_document(
+        "DOC-CURRENT",
+        current_doc,
+        rulebook,
+        screen_llm,
+        confirm_llm,
+        reference_documents=[("DOC-REF", reference_doc)],
+        xdc_rulebook=xdc_rulebook,
+    )
+
+    [issue] = result.issues
+    assert issue.rule_id == "XDC-01"
+    assert issue.reference_document == "DOC-REF"
+    assert issue.reference_quote == "신청 기한: 상품 수령일로부터 14일 이내"
+    assert issue.difference_type == "value"
+
+
+def test_review_document_without_reference_documents_is_unaffected_by_xdc_params(rulebook_path):
+    # reference_documents=()(기본값)일 땐 xdc_rulebook을 같이 줘도 아무 XDC 콜도 안 일어나야
+    # 한다 — 스크립트에 XDC용 응답을 하나도 안 준비해뒀는데도 통과해야 회귀가 없다는 뜻.
+    rulebook = parse_rulebook(rulebook_path)
+    confirm_llm = ScriptedLLM([{"summary": ""}], keyed_responses={Level.PARAGRAPH: [], Level.DOCUMENT: []})
+    screen_llm = ScriptedLLM(keyed_responses={Level.PARAGRAPH: [_EMPTY_CANDIDATES], Level.DOCUMENT: [_EMPTY_CANDIDATES]})
+
+    result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
+
+    assert result.issues == ()
+    assert result.tier_errors == ()
+
+
 def test_review_document_reports_a_clear_error_if_a_plain_scripted_llm_is_used(rulebook_path):
     # A plain ScriptedLLM([...]) (no keyed_responses) used against a structure that
     # dispatches concurrently must fail with a clear, specific message in tier_errors —

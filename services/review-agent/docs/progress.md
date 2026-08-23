@@ -925,3 +925,57 @@ sunnic 알파테스트 피드백: 관계형 카테고리(LG/LF/GA)의 두 번째
 - 라이브 검증(DOC-001, Haiku 양쪽): LG-05/LF-04 두 건에서 `related_original_text`가
   실제로 채워지는 것 확인 (예: "P2 | GA 스크립트 삽입 및 이벤트 트래킹 설정 | 개발+기획").
 - 227/227 테스트 통과(review-agent 124 + eval-agent 84 + eval-service 19).
+
+## 2026-08-23 — 타문서 정합성(XDC) 후보 매처 1단계 (유진 룰북 §1 구현)
+
+3인 분업(유진: 룰북 작성 / 승현: 백엔드 연동 / 가영: 파이프라인 개발) 중 파이프라인 쪽. 유진의
+`타문서와의_정합성_룰북_Section1_후보매처_보충본.md` §1 설계(구조화 키 A + 별칭 B + Jaccard C,
+임베딩 D는 후속 PR)를 그대로 구현. 참고문서가 없으면(기존 호출부 전부 이 경우) 오늘과 100%
+동일하게 동작 — 새 파라미터는 전부 키워드 전용 + 기본값.
+
+### Done
+
+- `packages/planqa-schemas`의 `Issue`에 `reference_document/reference_section/
+  reference_quote/difference_type` 4개 필드 추가(전부 기본값 None) — related_location 추가
+  때와 같은 패턴.
+- `rulebook.py`의 `_TABLE_ROW`/`_REFERENCE_EXCEPTION_RULES` 정규식을 `[A-Z]{2}` →
+  `[A-Z]{2,3}`로 widen — 기존 카테고리(전부 2자)는 영향 없고, XDC(3자) 룰 카탈로그도 같은
+  파서로 그대로 파싱 가능해짐.
+- 신규 모듈 `structures/xdc.py`: `DecisionRecord`/`ReferenceIndex` 스키마, 참고문서 1건을
+  한 콜에 추출하는 `extract_decision_records`/`build_reference_index`, 별칭 정규화
+  (`load_aliases`, `data/xdc/aliases.json`), 바이그램 Jaccard(expr/review-agent PR #33의
+  `fewshot_retrieval.py` 알고리즘을 그대로 복제 — PR 자체는 미머지라 프로덕션이 의존하면
+  안 됨), 4개 신호를 합쳐 최대 top_k개로 정렬하는 `match_candidates`.
+- `bundled_screen_hybrid.py`: 참고문서가 있을 때만 Paragraph 패스의 스크리닝 콜에
+  `decision_records` 필드를 얹어 함께 반환(새 콜을 만들지 않음, §1-1 설계 그대로). 내부
+  카테고리 confirm(`_confirm_pass`/`_CONFIRM_HYBRID_SYSTEM`)은 건드리지 않고, XDC 전용
+  `_confirm_xdc_pass`/`_CONFIRM_XDC_SYSTEM`을 별도 트랙으로 추가 — 서로 다른 룰북·판정
+  기준을 한 프롬프트에 섞지 않기 위함. `review_document()`에 `reference_documents`(
+  `(doc_id, text)` 쌍 리스트)/`xdc_rulebook`/`xdc_aliases`/`reference_cache` 키워드 인자
+  추가.
+- 전달 방식: `planqa-backend`의 `qa_jobs.py`를 확인해보니 단일문서도
+  `store.get_document(id).raw_text`를 그대로 넘기는 패턴(review-agent는 I/O를 전혀 안 함)이라
+  참고문서도 동일하게 `(doc_id, text)` 쌍만 받도록 맞춤. `Document` 모델에 `version` 필드가
+  없어서, 캐시 키는 `(doc_id, version)` 대신 `sha256(text)[:16]` 텍스트 해시로 계산(승현 쪽
+  스키마 변경 불필요, 나중에 version이 생기면 그때 교체).
+- `dedupe.py`: `_same_relation`과 같은 패턴으로 `_same_reference` 추가 — 같은 rule_id/위치라도
+  `reference_document`가 다른 두 XDC 발견은 별개로 유지.
+- `data/xdc/xdc_rulebook_placeholder.md`(XDC-01 하나만) — 유진의 실제 룰 카탈로그(8/23 확정
+  예정) 확정 전까지 스캐폴딩/테스트용. `parse_rulebook()`이 포맷에만 의존해서 코드 변경 없이
+  교체 가능.
+- CLI(`cli.py`): `--reference`(반복 가능)/`--xdc-rulebook`/`--xdc-aliases` 추가. LLM 클라이언트
+  생성 전에 `--reference` + `--structure bundled_screen_hybrid` 아닌 조합을 먼저 거부해서 API
+  키 없이도 바로 실패하게 함(로컬 스모크테스트용 — 실제 백엔드 연동은 이 CLI를 거치지 않고
+  `review_document(..., reference_documents=[...])`를 직접 호출).
+- 신규 테스트: `test_xdc.py`(신호 A/B/C, top_k 랭킹, alias 로딩), `test_dedupe.py`에
+  reference_document 케이스 2개, `test_bundled_screen_hybrid.py`에 §1-7 예시(현재 문서 7일 vs
+  참고문서 14일 → XDC-01 카드 1건) 통합 테스트 + reference_documents 기본값 회귀 테스트.
+- 267/267 테스트 통과(review-agent 137 + planqa-schemas 8 + eval-agent 84 + eval-service 19).
+
+### Next
+
+- 단계 B(임베딩 의미 유사도, 신호 D) — Gemini 임베딩 API로 `structures/xdc.py`의
+  `match_candidates`에 한 신호만 더 추가하면 되는 구조로 이미 열어둠.
+- 유진의 실제 XDC 룰 카탈로그가 나오면 `data/xdc/xdc_rulebook_placeholder.md`를 교체.
+- 승현과 `POST /documents/{id}/qa-jobs` 요청 바디에 `reference_document_ids` 필드 추가하는
+  계약 확정 필요.
