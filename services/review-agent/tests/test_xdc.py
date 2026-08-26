@@ -91,6 +91,42 @@ def test_match_candidates_signal_b_alias_match():
     assert matched == [reference]
 
 
+def test_match_candidates_finds_the_right_reference_doc_among_several_unrelated_ones():
+    # §1-3: 후보 매처의 목적은 "충돌 판정"이 아니라 "같은 정책일 가능성이 있는" 참고문장을
+    # 여러 참고문서 중에서 찾아내는 것 — 관련 없는 문서(쿠폰/배송)에 있는 레코드는 신호가 전혀
+    # 안 걸려야 하고, 실제로 같은 정책(반품/신청 기한)을 다루는 문서에서만 찾아야 한다.
+    current = _record(quote="단순 변심 | 상품 수령일로부터 7일 이내", canonical_terms=("반품", "신청 기한", "7일"))
+    coupon_doc = xdc.ReferenceIndex(
+        doc_id="DOC-COUPON",
+        records=(
+            _record(
+                doc_id="DOC-COUPON",
+                quote="신규 가입 시 쿠폰 1회 발급",
+                policy_subject="쿠폰",
+                attribute="발급 조건",
+                canonical_terms=("쿠폰",),
+            ),
+        ),
+    )
+    shipping_doc = xdc.ReferenceIndex(
+        doc_id="DOC-SHIPPING",
+        records=(
+            _record(
+                doc_id="DOC-SHIPPING",
+                quote="서울 전 지역 당일 배송 가능",
+                policy_subject="배송",
+                attribute="배송 권역",
+                canonical_terms=("배송",),
+            ),
+        ),
+    )
+    refund_doc = xdc.ReferenceIndex(doc_id="DOC-REFUND", records=(_record(doc_id="DOC-REFUND"),))
+
+    matched = xdc.match_candidates(current, [coupon_doc, shipping_doc, refund_doc], aliases={})
+
+    assert [record.doc_id for record in matched] == ["DOC-REFUND"]
+
+
 def test_match_candidates_returns_empty_when_no_signal_hits():
     current = _record(
         quote="전혀 다른 주제입니다",

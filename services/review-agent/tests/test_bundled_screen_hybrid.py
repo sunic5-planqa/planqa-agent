@@ -370,6 +370,98 @@ def test_review_document_flags_xdc_conflict_against_reference_document(rulebook_
     assert issue.difference_type == "value"
 
 
+# §1-3: 후보 매처가 "충돌 판정"이 아니라 "같은 정책일 가능성이 있는 참고문장"을 여러 참고문서
+# 중에서 찾아내는 것이 목적 — 참고문서가 하나가 아니라 여러 개일 때, 관련 없는 문서(쿠폰/배송)를
+# 무시하고 실제로 같은 정책(반품/신청 기한)을 다루는 문서만 골라내는지 파이프라인 전체로 확인.
+def test_review_document_finds_the_right_reference_doc_among_several(rulebook_path, tmp_path):
+    rulebook = parse_rulebook(rulebook_path)
+    xdc_rulebook = _xdc_rulebook(tmp_path)
+    current_doc = "# 반품 정책\n\n## 1. 신청 기한\n\n단순 변심 | 상품 수령일로부터 7일 이내\n"
+    coupon_doc = "# 쿠폰 정책\n\n## 1. 발급 조건\n\n신규 가입 시 1회 발급\n"
+    shipping_doc = "# 배송 정책\n\n## 1. 배송 권역\n\n서울 전 지역 당일 배송\n"
+    refund_doc = "# 반품 정책 (참고)\n\n## 1. 신청 기한\n\n신청 기한: 상품 수령일로부터 14일 이내\n"
+
+    def _decision_response(quote: str, subject: str, attribute: str, value: str) -> dict:
+        return {
+            "decision_records": [
+                {
+                    "chunk_index": 0,
+                    "quote": quote,
+                    "policy_subject": subject,
+                    "attribute": attribute,
+                    "value": value,
+                    "canonical_terms": [subject, attribute],
+                }
+            ]
+        }
+
+    confirm_llm = ScriptedLLM(
+        [
+            _decision_response("신규 가입 시 1회 발급", "쿠폰", "발급 조건", ""),
+            _decision_response("서울 전 지역 당일 배송", "배송", "배송 권역", ""),
+            _decision_response("신청 기한: 상품 수령일로부터 14일 이내", "반품", "신청 기한", "14"),
+            {"summary": ""},
+        ],
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "verdicts": [
+                        {
+                            "index": 0,
+                            "violated": True,
+                            "rule_id": "XDC-01",
+                            "description": "신청 기한이 다름",
+                            "rationale": "현재 문서는 7일, 참고문서는 14일",
+                            "fix_direction": "14일로 정정",
+                            "excused": False,
+                            "difference_type": "value",
+                        }
+                    ]
+                }
+            ],
+        },
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "candidates": [],
+                    "decision_records": [
+                        {
+                            "chunk_index": 0,
+                            "quote": "단순 변심 | 상품 수령일로부터 7일 이내",
+                            "policy_subject": "반품",
+                            "attribute": "신청 기한",
+                            "value": "7",
+                            "canonical_terms": ["반품", "신청 기한", "7일"],
+                        }
+                    ],
+                }
+            ],
+            Level.DOCUMENT: [_EMPTY_CANDIDATES],
+        }
+    )
+
+    result = review_document(
+        "DOC-CURRENT",
+        current_doc,
+        rulebook,
+        screen_llm,
+        confirm_llm,
+        reference_documents=[("DOC-COUPON", coupon_doc), ("DOC-SHIPPING", shipping_doc), ("DOC-REFUND", refund_doc)],
+        xdc_rulebook=xdc_rulebook,
+    )
+
+    [issue] = result.issues
+    assert issue.reference_document == "DOC-REFUND"
+    # confirm_xdc_pass에 실제로 넘어간 후보 쌍이 1개뿐이었는지(쿠폰/배송 레코드가 안 섞여
+    # 들어갔는지) 프롬프트에서도 확인 — DOC-COUPON/DOC-SHIPPING 문구가 없어야 한다.
+    xdc_confirm_prompt = confirm_llm.isolated[Level.PARAGRAPH].calls[-1]["prompt"]
+    assert "신규 가입" not in xdc_confirm_prompt
+    assert "당일 배송" not in xdc_confirm_prompt
+    assert "14일 이내" in xdc_confirm_prompt
+
+
 def test_review_document_without_reference_documents_is_unaffected_by_xdc_params(rulebook_path):
     # reference_documents=()(기본값)일 땐 xdc_rulebook을 같이 줘도 아무 XDC 콜도 안 일어나야
     # 한다 — 스크립트에 XDC용 응답을 하나도 안 준비해뒀는데도 통과해야 회귀가 없다는 뜻.
