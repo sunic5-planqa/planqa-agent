@@ -206,6 +206,43 @@ def test_review_document_dispatches_ga_at_document_level_only(rulebook_path):
     assert issue.level == "Document"
 
 
+def test_extra_absence_check_rule_ids_routes_a_normally_paragraph_rule_to_document(rulebook_path):
+    # ABSENCE_CHECK_RULE_IDS is a closed set of two literal built-in rule_ids (LG-01,
+    # TC-02) — a caller merging in rules of its own (dynamically-generated rule_ids) has no
+    # way to mark one as absence-check without this extension point. MI-01 is an ordinary
+    # paragraph-tier rule here only to prove the override actually moves dispatch, not
+    # because it's realistically absence-check shaped.
+    rulebook = parse_rulebook(rulebook_path)
+    confirm_llm = ScriptedLLM(
+        [{"summary": ""}],
+        keyed_responses={
+            Level.DOCUMENT: [
+                {
+                    "verdicts": [
+                        {"index": 0, "violated": True, "original_text": "x", "description": "d", "excused": False}
+                    ]
+                }
+            ],
+        },
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [_EMPTY_CANDIDATES],
+            Level.DOCUMENT: [
+                {"candidates": [{"chunk_index": 0, "rule_id": "MI-01", "quoted_text": "x", "reason": "r"}]}
+            ],
+        }
+    )
+
+    result = review_document(
+        "DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm, extra_absence_check_rule_ids=frozenset({"MI-01"})
+    )
+
+    [issue] = result.issues
+    assert issue.rule_id == "MI-01"
+    assert issue.level == "Document"
+
+
 def test_review_document_dispatches_lg_and_lf_at_document_level_too(rulebook_path):
     # LG/LF are relational categories (_RELATIONAL_CATEGORIES) just like GA — they're
     # defined as conflicts between two distant locations, so (2026-08-10 보완) they need

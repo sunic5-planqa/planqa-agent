@@ -245,11 +245,19 @@ def _confirm_pass(
     return issues
 
 
-def _paragraph_and_document_rules(rulebook: RuleBook) -> tuple[list[RuleDef], list[RuleDef]]:
+def _paragraph_and_document_rules(
+    rulebook: RuleBook, extra_absence_check_rule_ids: frozenset[str] = frozenset()
+) -> tuple[list[RuleDef], list[RuleDef]]:
+    # extra_absence_check_rule_ids lets a caller route rules ABSENCE_CHECK_RULE_IDS can't
+    # name — that constant is a closed set of two literal §1-authored rule_ids (LG-01,
+    # TC-02), so it can never recognize a rule_id it wasn't written with in mind (e.g. a
+    # dynamically-generated one from a caller merging in rules of its own at request time).
+    # Default empty so every existing caller (nothing passes this yet) is unaffected.
+    absence_check_ids = ABSENCE_CHECK_RULE_IDS | extra_absence_check_rule_ids
     paragraph_rules: list[RuleDef] = []
     document_rules: list[RuleDef] = []
     for rule in rulebook.rules.values():
-        if rule.category in _RELATIONAL_CATEGORIES or rule.rule_id in ABSENCE_CHECK_RULE_IDS:
+        if rule.category in _RELATIONAL_CATEGORIES or rule.rule_id in absence_check_ids:
             document_rules.append(rule)
         else:
             paragraph_rules.append(rule)
@@ -334,6 +342,8 @@ def review_document(
     rulebook: RuleBook,
     screen_llm: LLMClient,
     confirm_llm: LLMClient,
+    *,
+    extra_absence_check_rule_ids: frozenset[str] = frozenset(),
 ) -> ReviewResult:
     tier_errors: list[str] = []
     events: list[CallEvent] = []
@@ -352,7 +362,7 @@ def review_document(
         tier_errors.append(f"Global Context 추출 실패: {error}")
 
     tree = parse_document(doc_id, document_text)
-    paragraph_rules, document_rules = _paragraph_and_document_rules(rulebook)
+    paragraph_rules, document_rules = _paragraph_and_document_rules(rulebook, extra_absence_check_rule_ids)
     all_issues: list[Issue] = []
 
     passes = (
