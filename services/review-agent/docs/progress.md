@@ -1024,3 +1024,23 @@ planqa-backend가 팀 룰을 문단형/관계형/부재확인형 3가지로 자�
 
 - planqa-backend 쪽에서 팀 룰 분류(LLM 호출) 결과 중 "부재확인형"으로 판정된 rule_id들을 모아
   이 파라미터로 넘기는 실제 배선 작업.
+
+## 2026-08-28 (계속) — XDC placeholder 룰북을 실제 룰 카탈로그로 교체
+
+승현이 planqa-backend에서 독립적으로 XDC 기능을 구현(PR sunic5-planqa/planqa#115)한 걸
+발견 — 팀 룰 통합 코드를 실수로 되돌리는 문제가 있어 그 PR 자체는 안 쓰기로 했지만, 안에 있던
+룰 카탈로그(XDC-01~04, 수수료율/적용범위/처리결과/변경사항 4개)는 유진 룰북 없이도 바로 쓸
+수 있는 완성도라 이쪽으로 이식.
+
+### Done
+
+- `data/xdc/xdc_rulebook_placeholder.md` → `data/xdc/xdc_rulebook_v1.0.md`로 교체 —
+  XDC-01(핵심 정책값 불일치)~XDC-04(확정 변경사항 미반영) 4개 룰, `parse_rulebook()`으로
+  정상 파싱 확인.
+- `cli.py`의 `DEFAULT_XDC_RULEBOOK`도 새 파일명으로 갱신.
+- 140/140 테스트 통과, 회귀 없음(테스트는 자체 인라인 룰북을 쓰므로 이 교체와 무관).
+
+### Next
+
+- 이 룰 카탈로그 + 이 레포의 후보 매처 구현을 그대로 planqa-backend에 재벤더링해서
+  실제 서비스에 연결하는 작업 진행 중.

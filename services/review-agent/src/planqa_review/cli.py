@@ -20,7 +20,7 @@ from planqa_review.structures import xdc
 from planqa_schemas.rulebook import parse_rulebook
 
 DEFAULT_RULEBOOK = Path("data/rulebook/rulebook_v1.0.md")
-DEFAULT_XDC_RULEBOOK = Path("data/xdc/xdc_rulebook_placeholder.md")
+DEFAULT_XDC_RULEBOOK = Path("data/xdc/xdc_rulebook_v1.0.md")
 DEFAULT_XDC_ALIASES = Path("data/xdc/aliases.json")
 
 
