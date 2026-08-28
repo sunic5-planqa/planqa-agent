@@ -7,9 +7,11 @@ from pathlib import Path
 from planqa_schemas.schema import KOREAN_LEVEL_NAMES, Level
 
 _CATEGORY_HEADING = re.compile(r"(?m)^## \d+\.\s*(.+)$")
-_TABLE_ROW = re.compile(r"(?m)^\|\s*([A-Z]{2}-\d{2})\s*\|(.*)\|\s*$")
+# {2,3}: 기존 카테고리는 전부 2자(LG/TC/TM/AE/MI/RD/GA/LF)지만, 타문서 정합성 룰북의 XDC는
+# 3자 — 위젯 폭만 넓혔을 뿐 2자 매칭은 그대로라 기존 룰북 파싱에 영향 없음.
+_TABLE_ROW = re.compile(r"(?m)^\|\s*([A-Z]{2,3}-\d{2})\s*\|(.*)\|\s*$")
 _REFERENCE_EXCEPTION_RULES = re.compile(
-    r"적용\s*대상\s*룰[:：]\s*([A-Z]{2}-\d{2}(?:\s*,\s*[A-Z]{2}-\d{2})*)"
+    r"적용\s*대상\s*룰[:：]\s*([A-Z]{2,3}-\d{2}(?:\s*,\s*[A-Z]{2,3}-\d{2})*)"
 )
 
 

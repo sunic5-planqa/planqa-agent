@@ -68,6 +68,10 @@ def issue_dicts(result: ReviewResult) -> list[dict[str, Any]]:
             "fix_direction": issue.fix_direction,
             "related_location": issue.related_location,
             "related_original_text": issue.related_original_text,
+            "reference_document": issue.reference_document,
+            "reference_section": issue.reference_section,
+            "reference_quote": issue.reference_quote,
+            "difference_type": issue.difference_type,
         }
         for i, issue in enumerate(result.issues)
     ]
@@ -162,6 +166,11 @@ def to_markdown(result: ReviewResult, rulebook: RuleBook, stats: RunStats | None
             lines.append(f"- 관련 위치: {issue.related_location}")
         if issue.related_original_text:
             lines.append(f"- 관련 위치 원문: {issue.related_original_text}")
+        if issue.reference_document:
+            # 타문서 정합성 룰북 §1-6 카드 포맷: "참고 기준: DOC-005 §2-1 - <원문>" 한 줄.
+            section = f" {issue.reference_section}" if issue.reference_section else ""
+            quote = f" - {issue.reference_quote}" if issue.reference_quote else ""
+            lines.append(f"- 참고 기준: {issue.reference_document}{section}{quote}")
         lines.append("")
         diff = _diff_block(issue.original_text, issue.fix_direction)
         if diff:
