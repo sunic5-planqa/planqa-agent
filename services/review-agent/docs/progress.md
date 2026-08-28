@@ -1044,3 +1044,27 @@ planqa-backend가 팀 룰을 문단형/관계형/부재확인형 3가지로 자�
 
 - 이 룰 카탈로그 + 이 레포의 후보 매처 구현을 그대로 planqa-backend에 재벤더링해서
   실제 서비스에 연결하는 작업 진행 중.
+
+## 2026-08-29 — XDC confirm 실패 시 일반 이슈까지 날아가는 문제 수정
+
+planqa-backend PR #117(재벤더링된 XDC 연동) 코드 리뷰에서 발견 — `_run_pass`가 일반
+`_confirm_pass`와 `_run_xdc_confirm`을 같은 try/except로 묶어놔서, XDC confirm 쪽에서만
+실패해도(네트워크 오류, 잘못된 JSON 등) 이미 확정된 정상 이슈(TC/AE/MI 등)까지 그 패스
+전체가 통째로 버려짐 — 참고문서를 붙였다는 이유만으로 기존 단일문서 검토 안정성이
+나빠지는 회귀.
+
+### Done
+
+- `_run_pass`의 XDC confirm 호출을 별도 try/except로 분리 — XDC만 실패하면 이미 얻은
+  `issues`는 그대로 반환하고 XDC 실패만 tier_error로 보고. screen/일반 confirm 자체가
+  실패하는 기존 케이스는 바깥쪽 try/except가 그대로 처리(동작 변화 없음).
+- 신규 회귀 테스트: `ScriptedLLM` 응답 큐를 정상 confirm 1번만 채워두고 XDC confirm이
+  두 번째 호출에서 `StopIteration`으로 실패하는 상황을 재현 — 정상 이슈(MI-01)는 살아남고
+  XDC 실패만 tier_errors에 담기는지 확인.
+- 141/141 테스트 통과(기존 140 + 신규 1).
+
+### Next
+
+- planqa-backend PR #117 재벤더링 필요(이 수정 반영).
+- 리뷰에서 같이 나온 항목(참고문서 캐시 미전달, XDC/GA dedup 우선순위 동률)은
+  planqa-backend 쪽(qa_jobs.py) 문제라 그쪽에서 처리.
