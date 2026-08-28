@@ -492,15 +492,24 @@ def _run_pass(
                 ),
             )
         if xdc_active and decision_records:
-            xdc_issues = record_call(
-                isolated_confirm,
-                stage="xdc_confirm",
-                tier=level,
-                rule_ids=tuple(xdc_context.xdc_rulebook.rules),
-                events=events,
-                call=lambda: _run_xdc_confirm(decision_records, xdc_context, doc_id, level, isolated_confirm),
-            )
-            issues = issues + xdc_issues
+            # Own try/except, not folded into the outer one below — the outer except exists
+            # for genuine whole-pass failures (screen/confirm themselves broke), but an XDC-
+            # specific failure (a network hiccup, a malformed verdict) shouldn't discard the
+            # non-XDC issues _confirm_pass already successfully confirmed above. Without this,
+            # attaching reference documents made an otherwise-successful pass strictly worse
+            # than before XDC existed.
+            try:
+                xdc_issues = record_call(
+                    isolated_confirm,
+                    stage="xdc_confirm",
+                    tier=level,
+                    rule_ids=tuple(xdc_context.xdc_rulebook.rules),
+                    events=events,
+                    call=lambda: _run_xdc_confirm(decision_records, xdc_context, doc_id, level, isolated_confirm),
+                )
+                issues = issues + xdc_issues
+            except Exception as error:  # noqa: BLE001 - see comment above
+                return issues, events, f"{level.value} 패스 XDC 검토 실패: {error}"
         return issues, events, None
     except Exception as error:  # noqa: BLE001 - one pass's failure shouldn't sink the whole review
         return [], events, f"{level.value} 패스 검토 실패: {error}"

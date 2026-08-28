@@ -407,6 +407,90 @@ def test_review_document_flags_xdc_conflict_against_reference_document(rulebook_
     assert issue.difference_type == "value"
 
 
+# 회귀 테스트 — _run_xdc_confirm이 (네트워크 오류 등으로) 실패했을 때, 같은 패스에서 이미
+# _confirm_pass가 확정해둔 일반(non-XDC) 이슈까지 통째로 버려지면 안 된다. 참고문서를 붙였다는
+# 이유만으로 기존 단일문서 검토 안정성이 나빠지는 건 회귀다.
+def test_xdc_confirm_failure_does_not_discard_already_confirmed_normal_issues(rulebook_path, tmp_path):
+    rulebook = parse_rulebook(rulebook_path)
+    xdc_rulebook = _xdc_rulebook(tmp_path)
+    current_doc = "# 반품 정책\n\n## 1. 신청 기한\n\n단순 변심 | 상품 수령일로부터 7일 이내\n"
+    reference_doc = "# 반품 정책 (참고)\n\n## 1. 신청 기한\n\n신청 기한: 상품 수령일로부터 14일 이내\n"
+
+    reference_decision_response = {
+        "decision_records": [
+            {
+                "chunk_index": 0,
+                "quote": "신청 기한: 상품 수령일로부터 14일 이내",
+                "policy_subject": "반품",
+                "attribute": "신청 기한",
+                "canonical_terms": ["반품", "신청 기한"],
+            }
+        ]
+    }
+    # Level.PARAGRAPH에 정상 confirm용 응답 딱 1개만 준다 — 같은 pass 안에서 XDC confirm이
+    # (같은 isolated_confirm 인스턴스로) 두 번째 호출을 시도하면 ScriptedLLM의 응답 큐가
+    # 바닥나 StopIteration이 나서, 실제 API 장애를 흉내낸다.
+    confirm_llm = ScriptedLLM(
+        [reference_decision_response, {"summary": ""}],
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "verdicts": [
+                        {
+                            "index": 0,
+                            "violated": True,
+                            "original_text": "단순 변심 | 상품 수령일로부터 7일 이내",
+                            "description": "d",
+                            "fix_direction": "f",
+                            "excused": False,
+                        }
+                    ]
+                }
+            ],
+        },
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "candidates": [
+                        {
+                            "chunk_index": 0,
+                            "rule_id": "MI-01",
+                            "quoted_text": "단순 변심 | 상품 수령일로부터 7일 이내",
+                            "reason": "r",
+                        }
+                    ],
+                    "decision_records": [
+                        {
+                            "chunk_index": 0,
+                            "quote": "단순 변심 | 상품 수령일로부터 7일 이내",
+                            "policy_subject": "반품",
+                            "attribute": "신청 기한",
+                            "canonical_terms": ["반품", "신청 기한"],
+                        }
+                    ],
+                }
+            ],
+            Level.DOCUMENT: [_EMPTY_CANDIDATES],
+        }
+    )
+
+    result = review_document(
+        "DOC-CURRENT",
+        current_doc,
+        rulebook,
+        screen_llm,
+        confirm_llm,
+        reference_documents=[("DOC-REF", reference_doc)],
+        xdc_rulebook=xdc_rulebook,
+    )
+
+    # 정상 이슈(MI-01)는 살아남고, XDC 실패는 tier_errors로만 보고돼야 한다.
+    assert [issue.rule_id for issue in result.issues] == ["MI-01"]
+    assert any("XDC" in error for error in result.tier_errors)
+
+
 # §1-3: 후보 매처가 "충돌 판정"이 아니라 "같은 정책일 가능성이 있는 참고문장"을 여러 참고문서
 # 중에서 찾아내는 것이 목적 — 참고문서가 하나가 아니라 여러 개일 때, 관련 없는 문서(쿠폰/배송)를
 # 무시하고 실제로 같은 정책(반품/신청 기한)을 다루는 문서만 골라내는지 파이프라인 전체로 확인.
