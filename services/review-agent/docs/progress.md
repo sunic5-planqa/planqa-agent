@@ -925,3 +925,27 @@ sunnic 알파테스트 피드백: 관계형 카테고리(LG/LF/GA)의 두 번째
 - 라이브 검증(DOC-001, Haiku 양쪽): LG-05/LF-04 두 건에서 `related_original_text`가
   실제로 채워지는 것 확인 (예: "P2 | GA 스크립트 삽입 및 이벤트 트래킹 설정 | 개발+기획").
 - 227/227 테스트 통과(review-agent 124 + eval-agent 84 + eval-service 19).
+
+## 2026-08-28 — 부재확인형 확장 포인트 (planqa-backend 팀 룰 3단계 분류 지원)
+
+planqa-backend가 팀 룰을 문단형/관계형/부재확인형 3가지로 자동 분류해서 QA에 적용하려는데,
+관계형은 기존 `category in {LG,LF,GA}` 판정을 그대로 재사용(팀 룰 category를 내부적으로
+"GA" 등으로 세팅)하면 되지만, 부재확인형은 `ABSENCE_CHECK_RULE_IDS`가 `{"LG-01", "TC-02"}`
+딱 2개 rule_id만 인식하는 폐쇄 집합이라 재사용이 불가능했음 — 확장 포인트 추가.
+
+### Done
+
+- `_paragraph_and_document_rules(rulebook, extra_absence_check_rule_ids=frozenset())` —
+  호출자가 넘긴 rule_id도 `ABSENCE_CHECK_RULE_IDS`에 합쳐서 판정(`|` 합집합). 기본값이 빈
+  frozenset이라 기존 호출부(review_document 안쪽 자기 자신 포함) 전부 영향 없음.
+- `review_document(..., *, extra_absence_check_rule_ids: frozenset[str] = frozenset())` —
+  키워드 전용 + 기본값, 위 함수까지 그대로 전달.
+- 신규 테스트: 원래 문단형인 MI-01을 `extra_absence_check_rule_ids={"MI-01"}`로 넘기면 실제로
+  Document 위계로 디스패치되는지 확인.
+- 125/125 review-agent 테스트 통과(기존 124 + 신규 1), planqa-schemas 8/8·eval-agent 84/84
+  회귀 없음.
+
+### Next
+
+- planqa-backend 쪽에서 팀 룰 분류(LLM 호출) 결과 중 "부재확인형"으로 판정된 rule_id들을 모아
+  이 파라미터로 넘기는 실제 배선 작업.
