@@ -9,10 +9,23 @@ from planqa_schemas.rulebook import RuleBook
 from planqa_schemas.schema import Issue
 
 # "<title>(DOC-XXX) 참고/참조" style citation, e.g. "반품/교환 정책서(DOC-005) 참고."
-_CITATION = re.compile(
+_CITATION_DOC_CODE = re.compile(
     r"[「『\"']?([^「『\"'()\n]{2,40}?)[」』\"']?\s*\(?\s*(DOC-\d{3})\s*\)?\s*(?:참고|참조)"
 )
+# Prose citation without a DOC-XXX code, e.g. "「5G 가족결합 운영전략서」 2-4 '과도한
+# 데이터 이전 방지 원칙'을 따른다" or "...2-2 '하위 재량 허용 범위'에 해당하는 경우" — the
+# same 문서명+섹션 reference 룰북 §3 describes, phrased as a sentence instead of the
+# "(DOC-XXX) 참고" shorthand the original regex assumed (found via the "예외조건 data"
+# QA-dataset test rows, none of which use a DOC-XXX code — planqa-agent issue-free finding,
+# 2026-08-12).
+_CITATION_NATURAL = re.compile(
+    r"「[^」]{2,40}」\s*\d+(?:-\d+)?[^.\n]{0,40}?(?:따른다|따릅니다|해당하는 경우|참조 표기|참고|참조)"
+)
 _QUOTED = re.compile(r"[「『\"'`]([^」』\"'`]{2,30})[」』\"'`]")
+
+
+def _has_citation(block: str) -> bool:
+    return bool(_CITATION_DOC_CODE.search(block) or _CITATION_NATURAL.search(block))
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,14 +87,17 @@ def has_valid_reference_exception(golden_issue: Issue, source_text: str | None) 
     정책서(DOC-005) 참고" citation sits in its own paragraph, separate from the "빠른 시일
     내" style SLA wording it does NOT excuse) — see tests/test_verifier.py for that case.
     It may under- or over-excuse cases where the citation and the flagged phrase share a
-    paragraph without one truly justifying the other; treat this as best-effort pending
-    real examples of the other three exception rules (LG-04/TC-02/GA-03) to validate against.
+    paragraph without one truly justifying the other; treat this as best-effort. Validated
+    against the "예외조건 data" QA-dataset rows for all four reference-exception rules
+    (LG-03/TC-02/AE-01/GA-03) on 2026-08-12 — those rows all cite in prose ("「제목」 2-4
+    '...'을 따른다") rather than the "(DOC-XXX) 참고" shorthand, which is why the citation
+    check below has two patterns instead of one.
     """
     if not source_text:
         return False
     keywords = _flagged_keywords(golden_issue)
     for block in _paragraph_blocks(source_text):
-        if _CITATION.search(block) and any(keyword in block for keyword in keywords):
+        if _has_citation(block) and any(keyword in block for keyword in keywords):
             return True
     return False
 

@@ -68,3 +68,24 @@ def test_has_valid_reference_exception_false_when_citation_is_a_different_paragr
 def test_has_valid_reference_exception_false_without_source_text():
     golden = _issue()
     assert has_valid_reference_exception(golden, None) is False
+
+
+def test_has_valid_reference_exception_true_for_prose_citation_without_doc_code():
+    # The "예외조건 data" QA-dataset rows all cite this way ("「제목」 2-4 '...'을 따른다")
+    # instead of the "(DOC-XXX) 참고" shorthand the original regex assumed — found while
+    # computing a real defense-rate figure against that dataset (2026-08-12).
+    golden = _issue(rule_id="LG-03", original_text="가족 대표 회선은 월 최대 10GB까지 데이터를 선물할 수 있다.")
+    source_text = (
+        "가족 대표 회선은 월 최대 10GB까지 데이터를 선물할 수 있다. 월 한도 설정의 도입 근거는 "
+        "「5G 가족결합 운영전략서」 2-4 '과도한 데이터 이전 방지 원칙'을 따른다."
+    )
+    assert has_valid_reference_exception(golden, source_text) is True
+
+
+def test_has_valid_reference_exception_true_for_prose_citation_with_haedanghaneun_gyeong():
+    golden = _issue(rule_id="GA-03", original_text="긴급공지 작성자는 '긴급 발행'을 선택할 수 있다.")
+    source_text = (
+        "긴급공지 작성자는 「SKT 전사 중요공지 발행 정책·기능서」 2-2 '하위 재량 허용 범위'에 "
+        "해당하는 경우에만 '긴급 발행'을 선택할 수 있다."
+    )
+    assert has_valid_reference_exception(golden, source_text) is True
