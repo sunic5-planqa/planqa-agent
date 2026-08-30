@@ -958,3 +958,180 @@ sunnic 알파테스트 피드백: 관계형 카테고리(LG/LF/GA)의 두 번째
   검증 불가 — 슬라이드에 "예외조건 O건 중 O건"을 29건 전체 기준으로 채우려면 이 실행이
   필요.
 - "오류 O건 중 O건 감지" 수치도 별도로 실제 리뷰 실행이 필요, 아직 미실행.
+
+## 2026-08-23 — 타문서 정합성(XDC) 후보 매처 1단계 (유진 룰북 §1 구현)
+
+3인 분업(유진: 룰북 작성 / 승현: 백엔드 연동 / 가영: 파이프라인 개발) 중 파이프라인 쪽. 유진의
+`타문서와의_정합성_룰북_Section1_후보매처_보충본.md` §1 설계(구조화 키 A + 별칭 B + Jaccard C,
+임베딩 D는 후속 PR)를 그대로 구현. 참고문서가 없으면(기존 호출부 전부 이 경우) 오늘과 100%
+동일하게 동작 — 새 파라미터는 전부 키워드 전용 + 기본값.
+
+### Done
+
+- `packages/planqa-schemas`의 `Issue`에 `reference_document/reference_section/
+  reference_quote/difference_type` 4개 필드 추가(전부 기본값 None) — related_location 추가
+  때와 같은 패턴.
+- `rulebook.py`의 `_TABLE_ROW`/`_REFERENCE_EXCEPTION_RULES` 정규식을 `[A-Z]{2}` →
+  `[A-Z]{2,3}`로 widen — 기존 카테고리(전부 2자)는 영향 없고, XDC(3자) 룰 카탈로그도 같은
+  파서로 그대로 파싱 가능해짐.
+- 신규 모듈 `structures/xdc.py`: `DecisionRecord`/`ReferenceIndex` 스키마, 참고문서 1건을
+  한 콜에 추출하는 `extract_decision_records`/`build_reference_index`, 별칭 정규화
+  (`load_aliases`, `data/xdc/aliases.json`), 바이그램 Jaccard(expr/review-agent PR #33의
+  `fewshot_retrieval.py` 알고리즘을 그대로 복제 — PR 자체는 미머지라 프로덕션이 의존하면
+  안 됨), 4개 신호를 합쳐 최대 top_k개로 정렬하는 `match_candidates`.
+- `bundled_screen_hybrid.py`: 참고문서가 있을 때만 Paragraph 패스의 스크리닝 콜에
+  `decision_records` 필드를 얹어 함께 반환(새 콜을 만들지 않음, §1-1 설계 그대로). 내부
+  카테고리 confirm(`_confirm_pass`/`_CONFIRM_HYBRID_SYSTEM`)은 건드리지 않고, XDC 전용
+  `_confirm_xdc_pass`/`_CONFIRM_XDC_SYSTEM`을 별도 트랙으로 추가 — 서로 다른 룰북·판정
+  기준을 한 프롬프트에 섞지 않기 위함. `review_document()`에 `reference_documents`(
+  `(doc_id, text)` 쌍 리스트)/`xdc_rulebook`/`xdc_aliases`/`reference_cache` 키워드 인자
+  추가.
+- 전달 방식: `planqa-backend`의 `qa_jobs.py`를 확인해보니 단일문서도
+  `store.get_document(id).raw_text`를 그대로 넘기는 패턴(review-agent는 I/O를 전혀 안 함)이라
+  참고문서도 동일하게 `(doc_id, text)` 쌍만 받도록 맞춤. `Document` 모델에 `version` 필드가
+  없어서, 캐시 키는 `(doc_id, version)` 대신 `sha256(text)[:16]` 텍스트 해시로 계산(승현 쪽
+  스키마 변경 불필요, 나중에 version이 생기면 그때 교체).
+- `dedupe.py`: `_same_relation`과 같은 패턴으로 `_same_reference` 추가 — 같은 rule_id/위치라도
+  `reference_document`가 다른 두 XDC 발견은 별개로 유지.
+- `data/xdc/xdc_rulebook_placeholder.md`(XDC-01 하나만) — 유진의 실제 룰 카탈로그(8/23 확정
+  예정) 확정 전까지 스캐폴딩/테스트용. `parse_rulebook()`이 포맷에만 의존해서 코드 변경 없이
+  교체 가능.
+- CLI(`cli.py`): `--reference`(반복 가능)/`--xdc-rulebook`/`--xdc-aliases` 추가. LLM 클라이언트
+  생성 전에 `--reference` + `--structure bundled_screen_hybrid` 아닌 조합을 먼저 거부해서 API
+  키 없이도 바로 실패하게 함(로컬 스모크테스트용 — 실제 백엔드 연동은 이 CLI를 거치지 않고
+  `review_document(..., reference_documents=[...])`를 직접 호출).
+- 신규 테스트: `test_xdc.py`(신호 A/B/C, top_k 랭킹, alias 로딩), `test_dedupe.py`에
+  reference_document 케이스 2개, `test_bundled_screen_hybrid.py`에 §1-7 예시(현재 문서 7일 vs
+  참고문서 14일 → XDC-01 카드 1건) 통합 테스트 + reference_documents 기본값 회귀 테스트.
+- 267/267 테스트 통과(review-agent 137 + planqa-schemas 8 + eval-agent 84 + eval-service 19).
+
+### Next
+
+- 단계 B(임베딩 의미 유사도, 신호 D) — Gemini 임베딩 API로 `structures/xdc.py`의
+  `match_candidates`에 한 신호만 더 추가하면 되는 구조로 이미 열어둠.
+- 유진의 실제 XDC 룰 카탈로그가 나오면 `data/xdc/xdc_rulebook_placeholder.md`를 교체.
+- 승현과 `POST /documents/{id}/qa-jobs` 요청 바디에 `reference_document_ids` 필드 추가하는
+  계약 확정 필요.
+
+## 2026-08-26 (계속) — 참고문서 여러 개일 때 후보 매처 검증
+
+§1의 "연관 문서에서 잘 찾는지" 재확인 요청 — 참고문서가 1개뿐인 기존 테스트로는 "여러 참고문서
+중 관련 없는 건 거르고 진짜 관련 있는 것만 찾는지"가 검증이 안 됐어서 추가.
+
+### Done
+
+- `test_xdc.py`에 `match_candidates` 단위테스트 추가: 쿠폰/배송/반품 3개 참고문서 인덱스 중
+  반품 문서의 레코드만 찾는지 확인.
+- 처음 작성한 버전은 실패했는데, **구현 버그가 아니라 테스트 픽스처 버그**였음 — 테스트 헬퍼
+  `_record()`의 `quote` 기본값이 반품 문서 텍스트라, 쿠폰/배송 레코드에 `quote`를 안 따로
+  줬더니 우연히 같은 문구를 갖게 돼서 신호 C(Jaccard)가 걸림. 각 레코드에 실제 도메인에 맞는
+  quote를 주니 통과 — 구현 자체(A/B/C 신호 판정)는 처음부터 맞았음.
+- 이 과정에서 신호 C의 "Jaccard 상위 2개, 점수 하한선 없음"(§1-4-C: "낮다는 이유만으로 제거하면
+  안 된다")이 의도대로 동작함을 재확인 — 아주 약한 표면 유사도만 있어도 후보로 넘어가는 게
+  스펙대로임(Sonnet이 최종 판정에서 걸러냄, §1-3).
+- `test_bundled_screen_hybrid.py`에 통합 테스트 추가: 참고문서 3개(쿠폰/배송/반품) 전체
+  파이프라인에 넣고, XDC 이슈 카드가 정확히 반품 문서(`DOC-REFUND`)만 참조하는지 + Sonnet
+  confirm 프롬프트에 실제로 쿠폰/배송 문구가 안 섞여 들어갔는지(문자열 부재로) 확인.
+- 139/139 테스트 통과(review-agent, 기존 137 + 신규 2).
+
+## 2026-08-28 — 부재확인형 확장 포인트 (planqa-backend 팀 룰 3단계 분류 지원)
+
+planqa-backend가 팀 룰을 문단형/관계형/부재확인형 3가지로 자동 분류해서 QA에 적용하려는데,
+관계형은 기존 `category in {LG,LF,GA}` 판정을 그대로 재사용(팀 룰 category를 내부적으로
+"GA" 등으로 세팅)하면 되지만, 부재확인형은 `ABSENCE_CHECK_RULE_IDS`가 `{"LG-01", "TC-02"}`
+딱 2개 rule_id만 인식하는 폐쇄 집합이라 재사용이 불가능했음 — 확장 포인트 추가.
+
+### Done
+
+- `_paragraph_and_document_rules(rulebook, extra_absence_check_rule_ids=frozenset())` —
+  호출자가 넘긴 rule_id도 `ABSENCE_CHECK_RULE_IDS`에 합쳐서 판정(`|` 합집합). 기본값이 빈
+  frozenset이라 기존 호출부(review_document 안쪽 자기 자신 포함) 전부 영향 없음.
+- `review_document(..., *, extra_absence_check_rule_ids: frozenset[str] = frozenset())` —
+  키워드 전용 + 기본값, 위 함수까지 그대로 전달.
+- 신규 테스트: 원래 문단형인 MI-01을 `extra_absence_check_rule_ids={"MI-01"}`로 넘기면 실제로
+  Document 위계로 디스패치되는지 확인.
+- 125/125 review-agent 테스트 통과(기존 124 + 신규 1), planqa-schemas 8/8·eval-agent 84/84
+  회귀 없음.
+
+### Next
+
+- planqa-backend 쪽에서 팀 룰 분류(LLM 호출) 결과 중 "부재확인형"으로 판정된 rule_id들을 모아
+  이 파라미터로 넘기는 실제 배선 작업.
+
+## 2026-08-28 (계속) — XDC placeholder 룰북을 실제 룰 카탈로그로 교체
+
+승현이 planqa-backend에서 독립적으로 XDC 기능을 구현(PR sunic5-planqa/planqa#115)한 걸
+발견 — 팀 룰 통합 코드를 실수로 되돌리는 문제가 있어 그 PR 자체는 안 쓰기로 했지만, 안에 있던
+룰 카탈로그(XDC-01~04, 수수료율/적용범위/처리결과/변경사항 4개)는 유진 룰북 없이도 바로 쓸
+수 있는 완성도라 이쪽으로 이식.
+
+### Done
+
+- `data/xdc/xdc_rulebook_placeholder.md` → `data/xdc/xdc_rulebook_v1.0.md`로 교체 —
+  XDC-01(핵심 정책값 불일치)~XDC-04(확정 변경사항 미반영) 4개 룰, `parse_rulebook()`으로
+  정상 파싱 확인.
+- `cli.py`의 `DEFAULT_XDC_RULEBOOK`도 새 파일명으로 갱신.
+- 140/140 테스트 통과, 회귀 없음(테스트는 자체 인라인 룰북을 쓰므로 이 교체와 무관).
+
+### Next
+
+- 이 룰 카탈로그 + 이 레포의 후보 매처 구현을 그대로 planqa-backend에 재벤더링해서
+  실제 서비스에 연결하는 작업 진행 중.
+
+## 2026-08-29 — XDC confirm 실패 시 일반 이슈까지 날아가는 문제 수정
+
+planqa-backend PR #117(재벤더링된 XDC 연동) 코드 리뷰에서 발견 — `_run_pass`가 일반
+`_confirm_pass`와 `_run_xdc_confirm`을 같은 try/except로 묶어놔서, XDC confirm 쪽에서만
+실패해도(네트워크 오류, 잘못된 JSON 등) 이미 확정된 정상 이슈(TC/AE/MI 등)까지 그 패스
+전체가 통째로 버려짐 — 참고문서를 붙였다는 이유만으로 기존 단일문서 검토 안정성이
+나빠지는 회귀.
+
+### Done
+
+- `_run_pass`의 XDC confirm 호출을 별도 try/except로 분리 — XDC만 실패하면 이미 얻은
+  `issues`는 그대로 반환하고 XDC 실패만 tier_error로 보고. screen/일반 confirm 자체가
+  실패하는 기존 케이스는 바깥쪽 try/except가 그대로 처리(동작 변화 없음).
+- 신규 회귀 테스트: `ScriptedLLM` 응답 큐를 정상 confirm 1번만 채워두고 XDC confirm이
+  두 번째 호출에서 `StopIteration`으로 실패하는 상황을 재현 — 정상 이슈(MI-01)는 살아남고
+  XDC 실패만 tier_errors에 담기는지 확인.
+- 141/141 테스트 통과(기존 140 + 신규 1).
+
+### Next
+
+- planqa-backend PR #117 재벤더링 필요(이 수정 반영).
+- 리뷰에서 같이 나온 항목(참고문서 캐시 미전달, XDC/GA dedup 우선순위 동률)은
+  planqa-backend 쪽(qa_jobs.py) 문제라 그쪽에서 처리.
+
+## 2026-08-29 (계속) — XDC 첫 라이브 평가 + XDC-03 예외 문구 수정
+
+지금까지 XDC는 전부 스크립트 가짜 LLM 응답으로만 검증했었음 — 실제 Gemini+Sonnet으로
+얼마나 정확한지는 한 번도 안 재봤다는 지적을 받고 처음으로 실측.
+
+### Done
+
+- 손으로 만든 골든 케이스 5개(현재문서/참고문서 쌍) — XDC-01~04 각 1개(값/범위/처리결과/
+  변경사항 미반영) + 오탐 방지용 예외 케이스 1개(프리미엄 회원 전용 반품 30일, 명시적
+  예외 조건 있음). 실제 API(Gemini Flash-Lite 스크리닝 + Sonnet 정밀판정)로 CLI 라이브
+  실행.
+- **1차 결과**: XDC-01/02/04 탐지, XDC-03(재고 자동 환불 vs 참고문서 수동 상담 처리)
+  미탐지, 예외 케이스는 정상적으로 오탐 없음 — 4개 중 3개 재현율, 오탐 0건.
+- **원인 진단**: XDC-03의 예외 조건 문구("참고문서가 선택지·조건부 처리·운영자 재량을
+  명시한 경우는 예외")가 너무 넓어서, "특정 절차가 수동으로 확정돼 있다"는 것과 "결과가
+  상황마다 달라질 수 있다"는 것을 구분 못 하고 전자까지 예외로 흡수해버린 것으로 추정.
+  참고문서의 "고객센터 상담 후 수동 결정"이라는 표현 자체가 "운영자 재량"으로 읽혀
+  Sonnet이 예외를 적용한 것으로 보임.
+- **수정**: `xdc_rulebook_v1.0.md`의 XDC-03 예외 조건을 "참고문서가 결과를 하나로 확정하지
+  않은 경우만 예외 — 특정 절차(수동 검토 포함)를 확정된 처리 방식으로 명시했다면 자동/
+  수동 여부와 무관하게 비교 대상"으로 좁힘.
+- **재검증**: 같은 5개 케이스 재실행 — XDC-01/02/03/04 전부 탐지, 예외 케이스는 여전히
+  오탐 없음. **4/4 재현율, 오탐 0건.**
+- 141/141 유닛테스트 그대로 통과(룰 텍스트만 바뀐 거라 회귀 없음).
+
+### 한계
+
+- n=5짜리 손으로 만든 케이스라 방향성 확인 수준 — 정식 recall/precision 벤치마크는 아님.
+  표본을 늘리거나(같은 룰을 문구 바꿔 여러 번 반복) 실사용 피드백이 쌓이면 재검증 필요.
+
+### Next
+
+- planqa-backend에 수정된 `xdc_rulebook_v1.0.md` 재벤더링.

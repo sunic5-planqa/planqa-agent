@@ -206,6 +206,43 @@ def test_review_document_dispatches_ga_at_document_level_only(rulebook_path):
     assert issue.level == "Document"
 
 
+def test_extra_absence_check_rule_ids_routes_a_normally_paragraph_rule_to_document(rulebook_path):
+    # ABSENCE_CHECK_RULE_IDS is a closed set of two literal built-in rule_ids (LG-01,
+    # TC-02) — a caller merging in rules of its own (dynamically-generated rule_ids) has no
+    # way to mark one as absence-check without this extension point. MI-01 is an ordinary
+    # paragraph-tier rule here only to prove the override actually moves dispatch, not
+    # because it's realistically absence-check shaped.
+    rulebook = parse_rulebook(rulebook_path)
+    confirm_llm = ScriptedLLM(
+        [{"summary": ""}],
+        keyed_responses={
+            Level.DOCUMENT: [
+                {
+                    "verdicts": [
+                        {"index": 0, "violated": True, "original_text": "x", "description": "d", "excused": False}
+                    ]
+                }
+            ],
+        },
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [_EMPTY_CANDIDATES],
+            Level.DOCUMENT: [
+                {"candidates": [{"chunk_index": 0, "rule_id": "MI-01", "quoted_text": "x", "reason": "r"}]}
+            ],
+        }
+    )
+
+    result = review_document(
+        "DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm, extra_absence_check_rule_ids=frozenset({"MI-01"})
+    )
+
+    [issue] = result.issues
+    assert issue.rule_id == "MI-01"
+    assert issue.level == "Document"
+
+
 def test_review_document_dispatches_lg_and_lf_at_document_level_too(rulebook_path):
     # LG/LF are relational categories (_RELATIONAL_CATEGORIES) just like GA — they're
     # defined as conflicts between two distant locations, so (2026-08-10 보완) they need
@@ -271,6 +308,292 @@ def test_screen_and_confirm_prompts_instruct_active_cross_location_search(rulebo
     confirm_system = confirm_llm.isolated[Level.DOCUMENT].calls[-1]["system"]
     assert "goal/KPI" in screen_system
     assert "actively search" in confirm_system
+
+
+def _xdc_rulebook(tmp_path):
+    from planqa_schemas.rulebook import parse_rulebook
+
+    path = tmp_path / "xdc_rulebook.md"
+    path.write_text(
+        "## 1. 타 문서 확정사항 불일치 Cross-Document Consistency\n\n"
+        "| **Rule ID** | **정의** | **예외 조건** |\n"
+        "| --- | --- | --- |\n"
+        "| XDC-01 | 동일 정책의 확정 사항은 참고문서와 일치해야 한다. | - |\n",
+        encoding="utf-8",
+    )
+    return parse_rulebook(path)
+
+
+# 타문서와의_정합성_룰북_Section1_후보매처_보충본.md §1-7의 예시(현재 문서 7일 vs 참고문서
+# 14일)를 그대로 골든 케이스로 씀.
+def test_review_document_flags_xdc_conflict_against_reference_document(rulebook_path, tmp_path):
+    rulebook = parse_rulebook(rulebook_path)
+    xdc_rulebook = _xdc_rulebook(tmp_path)
+    current_doc = "# 반품 정책\n\n## 1. 신청 기한\n\n단순 변심 | 상품 수령일로부터 7일 이내\n"
+    reference_doc = "# 반품 정책 (참고)\n\n## 1. 신청 기한\n\n신청 기한: 상품 수령일로부터 14일 이내\n"
+
+    reference_decision_response = {
+        "decision_records": [
+            {
+                "chunk_index": 0,
+                "quote": "신청 기한: 상품 수령일로부터 14일 이내",
+                "policy_subject": "반품",
+                "attribute": "신청 기한",
+                "value": "14",
+                "unit": "일",
+                "time_basis": "상품 수령일",
+                "canonical_terms": ["반품", "신청 기한", "14일"],
+            }
+        ]
+    }
+    confirm_llm = ScriptedLLM(
+        [reference_decision_response, {"summary": ""}],
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "verdicts": [
+                        {
+                            "index": 0,
+                            "violated": True,
+                            "rule_id": "XDC-01",
+                            "description": "신청 기한이 다름",
+                            "rationale": "현재 문서는 7일, 참고문서는 14일",
+                            "fix_direction": "14일로 정정",
+                            "excused": False,
+                            "difference_type": "value",
+                        }
+                    ]
+                }
+            ],
+        },
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "candidates": [],
+                    "decision_records": [
+                        {
+                            "chunk_index": 0,
+                            "quote": "단순 변심 | 상품 수령일로부터 7일 이내",
+                            "policy_subject": "반품",
+                            "attribute": "신청 기한",
+                            "value": "7",
+                            "unit": "일",
+                            "time_basis": "상품 수령일",
+                            "canonical_terms": ["반품", "신청 기한", "7일"],
+                        }
+                    ],
+                }
+            ],
+            Level.DOCUMENT: [_EMPTY_CANDIDATES],
+        }
+    )
+
+    result = review_document(
+        "DOC-CURRENT",
+        current_doc,
+        rulebook,
+        screen_llm,
+        confirm_llm,
+        reference_documents=[("DOC-REF", reference_doc)],
+        xdc_rulebook=xdc_rulebook,
+    )
+
+    [issue] = result.issues
+    assert issue.rule_id == "XDC-01"
+    assert issue.reference_document == "DOC-REF"
+    assert issue.reference_quote == "신청 기한: 상품 수령일로부터 14일 이내"
+    assert issue.difference_type == "value"
+
+
+# 회귀 테스트 — _run_xdc_confirm이 (네트워크 오류 등으로) 실패했을 때, 같은 패스에서 이미
+# _confirm_pass가 확정해둔 일반(non-XDC) 이슈까지 통째로 버려지면 안 된다. 참고문서를 붙였다는
+# 이유만으로 기존 단일문서 검토 안정성이 나빠지는 건 회귀다.
+def test_xdc_confirm_failure_does_not_discard_already_confirmed_normal_issues(rulebook_path, tmp_path):
+    rulebook = parse_rulebook(rulebook_path)
+    xdc_rulebook = _xdc_rulebook(tmp_path)
+    current_doc = "# 반품 정책\n\n## 1. 신청 기한\n\n단순 변심 | 상품 수령일로부터 7일 이내\n"
+    reference_doc = "# 반품 정책 (참고)\n\n## 1. 신청 기한\n\n신청 기한: 상품 수령일로부터 14일 이내\n"
+
+    reference_decision_response = {
+        "decision_records": [
+            {
+                "chunk_index": 0,
+                "quote": "신청 기한: 상품 수령일로부터 14일 이내",
+                "policy_subject": "반품",
+                "attribute": "신청 기한",
+                "canonical_terms": ["반품", "신청 기한"],
+            }
+        ]
+    }
+    # Level.PARAGRAPH에 정상 confirm용 응답 딱 1개만 준다 — 같은 pass 안에서 XDC confirm이
+    # (같은 isolated_confirm 인스턴스로) 두 번째 호출을 시도하면 ScriptedLLM의 응답 큐가
+    # 바닥나 StopIteration이 나서, 실제 API 장애를 흉내낸다.
+    confirm_llm = ScriptedLLM(
+        [reference_decision_response, {"summary": ""}],
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "verdicts": [
+                        {
+                            "index": 0,
+                            "violated": True,
+                            "original_text": "단순 변심 | 상품 수령일로부터 7일 이내",
+                            "description": "d",
+                            "fix_direction": "f",
+                            "excused": False,
+                        }
+                    ]
+                }
+            ],
+        },
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "candidates": [
+                        {
+                            "chunk_index": 0,
+                            "rule_id": "MI-01",
+                            "quoted_text": "단순 변심 | 상품 수령일로부터 7일 이내",
+                            "reason": "r",
+                        }
+                    ],
+                    "decision_records": [
+                        {
+                            "chunk_index": 0,
+                            "quote": "단순 변심 | 상품 수령일로부터 7일 이내",
+                            "policy_subject": "반품",
+                            "attribute": "신청 기한",
+                            "canonical_terms": ["반품", "신청 기한"],
+                        }
+                    ],
+                }
+            ],
+            Level.DOCUMENT: [_EMPTY_CANDIDATES],
+        }
+    )
+
+    result = review_document(
+        "DOC-CURRENT",
+        current_doc,
+        rulebook,
+        screen_llm,
+        confirm_llm,
+        reference_documents=[("DOC-REF", reference_doc)],
+        xdc_rulebook=xdc_rulebook,
+    )
+
+    # 정상 이슈(MI-01)는 살아남고, XDC 실패는 tier_errors로만 보고돼야 한다.
+    assert [issue.rule_id for issue in result.issues] == ["MI-01"]
+    assert any("XDC" in error for error in result.tier_errors)
+
+
+# §1-3: 후보 매처가 "충돌 판정"이 아니라 "같은 정책일 가능성이 있는 참고문장"을 여러 참고문서
+# 중에서 찾아내는 것이 목적 — 참고문서가 하나가 아니라 여러 개일 때, 관련 없는 문서(쿠폰/배송)를
+# 무시하고 실제로 같은 정책(반품/신청 기한)을 다루는 문서만 골라내는지 파이프라인 전체로 확인.
+def test_review_document_finds_the_right_reference_doc_among_several(rulebook_path, tmp_path):
+    rulebook = parse_rulebook(rulebook_path)
+    xdc_rulebook = _xdc_rulebook(tmp_path)
+    current_doc = "# 반품 정책\n\n## 1. 신청 기한\n\n단순 변심 | 상품 수령일로부터 7일 이내\n"
+    coupon_doc = "# 쿠폰 정책\n\n## 1. 발급 조건\n\n신규 가입 시 1회 발급\n"
+    shipping_doc = "# 배송 정책\n\n## 1. 배송 권역\n\n서울 전 지역 당일 배송\n"
+    refund_doc = "# 반품 정책 (참고)\n\n## 1. 신청 기한\n\n신청 기한: 상품 수령일로부터 14일 이내\n"
+
+    def _decision_response(quote: str, subject: str, attribute: str, value: str) -> dict:
+        return {
+            "decision_records": [
+                {
+                    "chunk_index": 0,
+                    "quote": quote,
+                    "policy_subject": subject,
+                    "attribute": attribute,
+                    "value": value,
+                    "canonical_terms": [subject, attribute],
+                }
+            ]
+        }
+
+    confirm_llm = ScriptedLLM(
+        [
+            _decision_response("신규 가입 시 1회 발급", "쿠폰", "발급 조건", ""),
+            _decision_response("서울 전 지역 당일 배송", "배송", "배송 권역", ""),
+            _decision_response("신청 기한: 상품 수령일로부터 14일 이내", "반품", "신청 기한", "14"),
+            {"summary": ""},
+        ],
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "verdicts": [
+                        {
+                            "index": 0,
+                            "violated": True,
+                            "rule_id": "XDC-01",
+                            "description": "신청 기한이 다름",
+                            "rationale": "현재 문서는 7일, 참고문서는 14일",
+                            "fix_direction": "14일로 정정",
+                            "excused": False,
+                            "difference_type": "value",
+                        }
+                    ]
+                }
+            ],
+        },
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "candidates": [],
+                    "decision_records": [
+                        {
+                            "chunk_index": 0,
+                            "quote": "단순 변심 | 상품 수령일로부터 7일 이내",
+                            "policy_subject": "반품",
+                            "attribute": "신청 기한",
+                            "value": "7",
+                            "canonical_terms": ["반품", "신청 기한", "7일"],
+                        }
+                    ],
+                }
+            ],
+            Level.DOCUMENT: [_EMPTY_CANDIDATES],
+        }
+    )
+
+    result = review_document(
+        "DOC-CURRENT",
+        current_doc,
+        rulebook,
+        screen_llm,
+        confirm_llm,
+        reference_documents=[("DOC-COUPON", coupon_doc), ("DOC-SHIPPING", shipping_doc), ("DOC-REFUND", refund_doc)],
+        xdc_rulebook=xdc_rulebook,
+    )
+
+    [issue] = result.issues
+    assert issue.reference_document == "DOC-REFUND"
+    # confirm_xdc_pass에 실제로 넘어간 후보 쌍이 1개뿐이었는지(쿠폰/배송 레코드가 안 섞여
+    # 들어갔는지) 프롬프트에서도 확인 — DOC-COUPON/DOC-SHIPPING 문구가 없어야 한다.
+    xdc_confirm_prompt = confirm_llm.isolated[Level.PARAGRAPH].calls[-1]["prompt"]
+    assert "신규 가입" not in xdc_confirm_prompt
+    assert "당일 배송" not in xdc_confirm_prompt
+    assert "14일 이내" in xdc_confirm_prompt
+
+
+def test_review_document_without_reference_documents_is_unaffected_by_xdc_params(rulebook_path):
+    # reference_documents=()(기본값)일 땐 xdc_rulebook을 같이 줘도 아무 XDC 콜도 안 일어나야
+    # 한다 — 스크립트에 XDC용 응답을 하나도 안 준비해뒀는데도 통과해야 회귀가 없다는 뜻.
+    rulebook = parse_rulebook(rulebook_path)
+    confirm_llm = ScriptedLLM([{"summary": ""}], keyed_responses={Level.PARAGRAPH: [], Level.DOCUMENT: []})
+    screen_llm = ScriptedLLM(keyed_responses={Level.PARAGRAPH: [_EMPTY_CANDIDATES], Level.DOCUMENT: [_EMPTY_CANDIDATES]})
+
+    result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
+
+    assert result.issues == ()
+    assert result.tier_errors == ()
 
 
 def test_review_document_reports_a_clear_error_if_a_plain_scripted_llm_is_used(rulebook_path):

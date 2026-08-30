@@ -24,6 +24,15 @@ def _same_relation(a: Issue, b: Issue) -> bool:
     return a.related_location == b.related_location
 
 
+def _same_reference(a: Issue, b: Issue) -> bool:
+    # XDC(타문서 정합성) findings carry a reference_document — a current-doc location
+    # mismatching two different reference documents on the same policy is two distinct
+    # findings, same reasoning/pattern as _same_relation above for related_location.
+    if a.reference_document is None or b.reference_document is None:
+        return True
+    return a.reference_document == b.reference_document
+
+
 def dedupe_issues(issues: list[Issue]) -> list[Issue]:
     """5단계 — §2 assigns several categories (e.g. MI) to more than one tier, so the same
     underlying problem can get flagged at both a coarse and a fine granularity. Collapse
@@ -36,6 +45,7 @@ def dedupe_issues(issues: list[Issue]) -> list[Issue]:
             issue.rule_id == existing.rule_id
             and _locations_overlap(issue.location, existing.location)
             and _same_relation(issue, existing)
+            and _same_reference(issue, existing)
             for existing in kept
         ):
             continue

@@ -1,0 +1,47 @@
+from __future__ import annotations
+
+from planqa_review.rulebook import RuleBook, RuleDef
+from planqa_review.schema import Level
+
+# Transcribed from rulebook_v1.0.md §2 "카테고리별 검토 위계". That table's cells contain
+# literal newlines inside a single markdown cell (Notion export artifact), which isn't safe
+# to regex-parse reliably — the 8 category prefixes below come from the same file's ## N.
+# headings (already parsed by rulebook.py), only the tier->category assignment is transcribed
+# by hand. Keep this in sync if rulebook_v1.0.md §2 changes.
+#
+# Word tier (5차) has no categories/input unit listed in §2 yet, so it's intentionally
+# excluded from review — see docs/review_agent_architecture.md "확장 포인트".
+TIER_CATEGORIES: dict[Level, tuple[str, ...]] = {
+    Level.DOCUMENT: ("LG", "LF", "TC", "TM", "MI", "RD", "GA"),
+    Level.LOGICAL_UNIT: ("LG", "LF", "TC", "TM", "AE", "MI", "RD", "GA"),
+    Level.PARAGRAPH: ("LG", "LF", "TC", "TM", "AE", "MI", "RD"),
+    Level.SENTENCE: ("LG", "TC", "TM", "AE", "MI"),
+}
+
+# Review call order — coarse-to-fine, matching the 1차~4차 sequence in §2.
+TIER_ORDER: tuple[Level, ...] = (
+    Level.DOCUMENT,
+    Level.LOGICAL_UNIT,
+    Level.PARAGRAPH,
+    Level.SENTENCE,
+)
+
+# §1's "위계 판정 원칙" footnote: 부재 확인형(Absence Check) 룰 — rules that ask "does this
+# statement exist ANYWHERE in the document" (e.g. "was this abbreviation ever defined",
+# "was this premise ever stated") can't be answered from a single paragraph/sentence chunk,
+# only from the whole document — so they're always routed to the Document tier regardless of
+# where their category would otherwise place them. The rulebook only names these two
+# examples ("TC-02 등이나 LG-01") — no column marks the full set, so this list is exactly
+# what §1 names, not a guess at a larger category. Keep in sync if §1 names more.
+ABSENCE_CHECK_RULE_IDS: frozenset[str] = frozenset({"LG-01", "TC-02"})
+
+
+def rules_for_tier(rulebook: RuleBook, level: Level) -> list[RuleDef]:
+    """Shared across every model profile (not just gemini_lite) and by the pipeline's own
+    instrumentation, which needs to know which rules a tier's call covers without importing
+    a specific profile's internals."""
+    categories = TIER_CATEGORIES.get(level, ())
+    rules = [rule for rule in rulebook.rules.values() if rule.category in categories]
+    if level is not Level.DOCUMENT:
+        rules = [rule for rule in rules if rule.rule_id not in ABSENCE_CHECK_RULE_IDS]
+    return rules
