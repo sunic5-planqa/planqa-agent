@@ -16,9 +16,12 @@ from planqa_review.models import DEFAULT_PROFILE, PROFILES
 from planqa_review.pipeline import review_document
 from planqa_review.run_stats import build_run_stats
 from planqa_review.structures import STRUCTURES
+from planqa_review.structures import xdc
 from planqa_schemas.rulebook import parse_rulebook
 
 DEFAULT_RULEBOOK = Path("data/rulebook/rulebook_v1.0.md")
+DEFAULT_XDC_RULEBOOK = Path("data/xdc/xdc_rulebook_v1.0.md")
+DEFAULT_XDC_ALIASES = Path("data/xdc/aliases.json")
 
 
 def _timestamp() -> str:
@@ -39,6 +42,15 @@ def cmd_review(args: argparse.Namespace) -> int:
     # single-document smoke test of a new structure before committing to a full benchmark run.
     profile_label = args.structure or args.profile
 
+    # --reference/--xdc-rulebook: 로컬 스모크테스트용 — 실제 백엔드 연동(승현 담당)은 이 CLI를
+    # 거치지 않고 review_document(..., reference_documents=[...])를 직접 호출한다. bundled_
+    # screen_hybrid 구조에서만 지원 — 다른 --structure/기본 profile 경로는 XDC 파라미터를
+    # 받지 않으므로 --reference를 같이 주면 사용자 실수를 조용히 무시하지 않고 바로 에러낸다.
+    # LLM 클라이언트를 만들기 전에 검사해서, 인자를 잘못 준 경우 API 키 없이도 바로 실패한다.
+    if args.reference and args.structure != "bundled_screen_hybrid":
+        print("--reference는 --structure bundled_screen_hybrid에서만 지원됩니다", file=sys.stderr)
+        return 1
+
     # Two separate clients so the cheap screening pass and the precise confirm pass can run
     # different models — and, via --screen-backend/--confirm-backend, different backends
     # entirely (e.g. demo: Gemini screen + Claude confirm) — see docs/review_agent_architecture.md.
@@ -54,9 +66,21 @@ def cmd_review(args: argparse.Namespace) -> int:
         else f"{resolved_screen_backend}+{resolved_confirm_backend}"
     )
 
+    xdc_kwargs: dict[str, object] = {}
+    if args.reference:
+        reference_documents = [
+            (_infer_doc_id(path), path.read_text(encoding="utf-8")) for path in args.reference
+        ]
+        xdc_rulebook_path = args.xdc_rulebook or DEFAULT_XDC_RULEBOOK
+        xdc_kwargs = {
+            "reference_documents": reference_documents,
+            "xdc_rulebook": parse_rulebook(xdc_rulebook_path),
+            "xdc_aliases": xdc.load_aliases(args.xdc_aliases or DEFAULT_XDC_ALIASES),
+        }
+
     start = time.perf_counter()
     if args.structure:
-        result = STRUCTURES[args.structure](doc_id, document_text, rulebook, screen_llm, confirm_llm)
+        result = STRUCTURES[args.structure](doc_id, document_text, rulebook, screen_llm, confirm_llm, **xdc_kwargs)
     else:
         result = review_document(doc_id, document_text, rulebook, screen_llm, confirm_llm, PROFILES[args.profile])
     stats = build_run_stats(
@@ -126,6 +150,15 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(STRUCTURES),
         help="구조 ablation용 — 지정 시 baseline(제안5) 대신 이 구조(src/planqa_review/structures/)로 실행, --profile은 무시됨",
     )
+    review_parser.add_argument(
+        "--reference",
+        type=Path,
+        action="append",
+        default=None,
+        help="타문서 정합성(XDC) 참고문서 경로 — 반복 가능, --structure bundled_screen_hybrid 전용",
+    )
+    review_parser.add_argument("--xdc-rulebook", type=Path, default=None, help=f"생략 시 {DEFAULT_XDC_RULEBOOK}")
+    review_parser.add_argument("--xdc-aliases", type=Path, default=None, help=f"생략 시 {DEFAULT_XDC_ALIASES}")
     review_parser.set_defaults(func=cmd_review)
 
     return parser

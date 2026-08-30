@@ -49,3 +49,14 @@ class Issue:
     # 자리·같은 조건(related_location과 함께, LG/LF/GA일 때만 채워지고 나머지는 항상 None).
     # (github.com/sunic5-planqa/planqa-agent issue #29)
     related_original_text: str | None = None
+    # 타문서 정합성(XDC) 카테고리 전용 — related_location/related_original_text가 "같은 문서
+    # 안의 두 번째 위치"를 가리키는 것과 대칭으로, 이 네 필드는 "현재 검토 중인 문서가 아닌
+    # 참고문서 쪽의 근거"를 가리킨다. XDC 위반이 확정됐을 때만 채워지고, 그 외 모든 카테고리는
+    # 항상 None. reference_document/reference_section은 위치 라벨, reference_quote는
+    # 그 위치의 정확한 인용문(원본 문구를 그대로 보여주기 위함 — related_original_text와 같은
+    # 이유), difference_type은 두 문서가 어떤 축(예: value/scope/condition)에서 다른지의 분류.
+    # (github.com/sunic5-planqa/planqa-agent — 타문서 정합성 룰북 Section 1)
+    reference_document: str | None = None
+    reference_section: str | None = None
+    reference_quote: str | None = None
+    difference_type: str | None = None
