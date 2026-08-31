@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from typing import Any
+
 from conftest import ScriptedLLM
 
 from planqa_schemas.rulebook import parse_rulebook
-from planqa_schemas.schema import Level
-from planqa_review.structures.bundled_screen_hybrid import review_document
+from planqa_schemas.schema import Issue, Level
+from planqa_review.structures.bundled_screen_hybrid import _verify_ae_finding, _verify_mi_finding, review_document
 
 _DOC = "# 샘플 PRD\n\n## 1. 목적\n\n간단한 목적 설명입니다.\n\n## 2. 배경\n\n두번째 문단입니다.\n"
 
@@ -610,3 +612,125 @@ def test_review_document_reports_a_clear_error_if_a_plain_scripted_llm_is_used(r
     result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
 
     assert any("keyed_responses" in error for error in result.tier_errors)
+
+
+class _StubVerifyLLM:
+    """A minimal LLMClient double for unit-testing _verify_mi_finding/_verify_ae_finding in
+    isolation, without needing a full ScriptedLLM response queue — mirrors expr/review-agent's
+    _StubVerifyLLM (2026-08-21, MI/AE 과탐지 검증 완화)."""
+
+    def __init__(self, response: Any | None, *, raise_error: bool = False) -> None:
+        self._response = response
+        self._raise_error = raise_error
+
+    def complete_json(self, *, system: str, prompt: str, cache_prefix: str | None = None) -> Any:
+        if self._raise_error:
+            raise RuntimeError("boom")
+        return self._response
+
+
+def _mi_issue(**overrides) -> Issue:
+    defaults = dict(
+        doc_id="DOC-TEST",
+        level="Paragraph",
+        rule_id="MI-01",
+        location="8. 런칭 계획",
+        description="런칭일/QA 기간이 구체적으로 명시되지 않음",
+        original_text="목표 런칭일: - QA 기간: ~",
+        rationale="시간 조건이 정의되지 않음",
+    )
+    defaults.update(overrides)
+    return Issue(**defaults)
+
+
+def _ae_issue(**overrides) -> Issue:
+    defaults = dict(
+        doc_id="DOC-TEST",
+        level="Paragraph",
+        rule_id="AE-03",
+        location="4. 처리 정책",
+        description="판단 기준이 불명확함",
+        original_text="적당한 기간 내에 처리한다",
+        rationale="구체적 기준이 없음",
+    )
+    defaults.update(overrides)
+    return Issue(**defaults)
+
+
+def test_verify_mi_finding_keeps_the_issue_when_verification_confirms_it_is_missing():
+    llm = _StubVerifyLLM({"actually_missing": True, "reason": "정말 없음"})
+    assert _verify_mi_finding("문서 전문", _mi_issue(), llm) is True
+
+
+def test_verify_mi_finding_drops_the_issue_when_verification_finds_it_present():
+    llm = _StubVerifyLLM({"actually_missing": False, "reason": "8장에 날짜가 있음"})
+    assert _verify_mi_finding("문서 전문", _mi_issue(), llm) is False
+
+
+def test_verify_mi_finding_fails_safe_by_keeping_the_issue_on_llm_error():
+    llm = _StubVerifyLLM(None, raise_error=True)
+    assert _verify_mi_finding("문서 전문", _mi_issue(), llm) is True
+
+
+def test_verify_mi_finding_fails_safe_on_malformed_response():
+    llm = _StubVerifyLLM("not a dict")
+    assert _verify_mi_finding("문서 전문", _mi_issue(), llm) is True
+
+
+def test_verify_ae_finding_keeps_the_issue_when_verification_confirms_it_is_ambiguous():
+    llm = _StubVerifyLLM({"actually_ambiguous": True, "reason": "정말 모호함"})
+    assert _verify_ae_finding("문서 전문", _ae_issue(), llm) is True
+
+
+def test_verify_ae_finding_drops_the_issue_when_verification_finds_it_defined_elsewhere():
+    llm = _StubVerifyLLM({"actually_ambiguous": False, "reason": "3장에 기준이 정의돼 있음"})
+    assert _verify_ae_finding("문서 전문", _ae_issue(), llm) is False
+
+
+def test_verify_ae_finding_fails_safe_by_keeping_the_issue_on_llm_error():
+    llm = _StubVerifyLLM(None, raise_error=True)
+    assert _verify_ae_finding("문서 전문", _ae_issue(), llm) is True
+
+
+def test_verify_ae_finding_fails_safe_on_malformed_response():
+    llm = _StubVerifyLLM("not a dict")
+    assert _verify_ae_finding("문서 전문", _ae_issue(), llm) is True
+
+
+def test_review_document_drops_an_mi_finding_the_fp_verifier_rejects(rulebook_path):
+    # End-to-end: a screened+confirmed MI candidate that _verify_mi_finding then rejects
+    # must not appear in the final issues — proves the verification stage is actually wired
+    # into review_document(), not just unit-tested in isolation above.
+    rulebook = parse_rulebook(rulebook_path)
+    confirm_llm = ScriptedLLM(
+        [{"summary": ""}, {"actually_missing": False, "reason": "8장에 이미 있음"}],
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {
+                    "verdicts": [
+                        {
+                            "index": 0,
+                            "violated": True,
+                            "original_text": "간단한 목적 설명입니다.",
+                            "description": "d",
+                            "fix_direction": "f",
+                            "excused": False,
+                        }
+                    ]
+                }
+            ],
+        },
+    )
+    screen_llm = ScriptedLLM(
+        keyed_responses={
+            Level.PARAGRAPH: [
+                {"candidates": [{"chunk_index": 0, "rule_id": "MI-01", "quoted_text": "간단한 목적 설명입니다.", "reason": "r"}]}
+            ],
+            Level.DOCUMENT: [_EMPTY_CANDIDATES],
+        }
+    )
+
+    result = review_document("DOC-TEST", _DOC, rulebook, screen_llm, confirm_llm)
+
+    assert result.issues == ()
+    assert result.tier_errors == ()
