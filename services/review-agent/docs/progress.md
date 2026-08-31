@@ -1135,3 +1135,35 @@ planqa-backend PR #117(재벤더링된 XDC 연동) 코드 리뷰에서 발견 �
 ### Next
 
 - planqa-backend에 수정된 `xdc_rulebook_v1.0.md` 재벤더링.
+
+## 2026-08-31 — MI/AE 과탐지 검증 + fix_direction 쉬운 문구 (혜서 담당 작업, expr→services 포팅)
+
+혜서 담당 "쉬운 것부터 3개" 중 review-agent 쪽 2개(2026-08-21, `expr/review-agent`에서 먼저
+구현·검증됨)를 실제 배포되는 `services/review-agent`로 포팅 — 지금까지 `expr/`에만 있고
+`services/`엔 반영이 안 돼서, 백엔드에 재벤더링해도 프로덕션엔 안 나가고 있던 상태였다.
+
+### Done
+
+- `_MI_VERIFY_SYSTEM`/`_AE_VERIFY_SYSTEM`/`_verify_mi_finding`/`_verify_ae_finding`/
+  `_FALSE_POSITIVE_VERIFIERS`/`_verify_false_positives`를 `expr/review-agent`의 이미 완화된
+  버전 그대로 `bundled_screen_hybrid.py`에 추가(`_confirm_pass` 다음, XDC 섹션 앞) —
+  "명확한 근거 문장을 못 찾으면 원래 판정(있다/모호하다=true)을 유지하라"는 지시로 과탐지
+  방지가 실제 발견을 지워버리던 문제를 완화한 버전.
+  `review_document()` 끝의 dedupe 직후에 연결 — 검증 자체가 실패해도(예외) 원래 이슈를
+  그대로 반환하도록 try/except로 감쌈(한 카테고리 검증 실패가 전체 결과를 지우면 안 됨).
+- `_CONFIRM_HYBRID_SYSTEM`의 `fix_direction` 지시에 "전문 용어 없이 비전문가가 바로 실행할
+  수 있는 평이한 문장으로" 추가.
+- **backend(`sunic5-planqa/planqa`) 쪽 중복 코드는 이미 삭제돼 있었음** — 8/21에 확인된
+  근본 원인(`qa_jobs.py`에 같은 목적의 우회 구현이 남아있어 이중 검증되던 문제)은 이미
+  별도 커밋으로 해결된 상태(재확인함), 여기 포팅은 그 삭제로 비어버린 "review-agent 자체의
+  정식 구현"을 채우는 것.
+- 신규 테스트 9개(`expr/review-agent`의 `_StubVerifyLLM` 기반 유닛테스트 8개 그대로 포팅 +
+  `review_document()` 엔드투엔드 1개 — 스크립트로 verify_fp가 실제 issue를 지우는지 확인).
+  review-agent 150/150 통과(기존 141 + 신규 9), `ruff check` 통과. eval-agent 84/84,
+  planqa-schemas 8/8 회귀 없음.
+
+### Next
+
+- planqa-backend에 재벤더링 필요.
+- 혜서 담당 3번째 항목(review-agent 아닌 쪽)은 이 레포/백엔드 어디에도 기록이 없음 — 본인
+  확인 필요.
