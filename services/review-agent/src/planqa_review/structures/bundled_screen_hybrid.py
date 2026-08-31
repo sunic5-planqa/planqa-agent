@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -127,7 +127,9 @@ _CONFIRM_HYBRID_SYSTEM = (
     "violate: quote the exact evidence sentence from the document (original_text), state "
     "what's wrong (description), explain why it breaks the rule (rationale), and write a "
     "concrete revised version of the text that would fix it (fix_direction) — phrase it as "
-    "a suggestion, not a command. Also apply the rule's own exception condition if given; "
+    "a suggestion, not a command, and in plain language a non-expert reader could act on "
+    "immediately without looking anything up — no jargon or terms of art the rule text "
+    "itself doesn't already use. Also apply the rule's own exception condition if given; "
     "set excused=true (with excuse_reason) when it applies. For the LG/LF/GA categories "
     "specifically, a violation is by definition a relationship error between two locations "
     "in the document — also name the OTHER location involved (related_location), using the "
@@ -292,6 +294,109 @@ def _confirm_pass(
             )
         )
     return issues
+
+
+# MI(정보 누락)/AE(모호한 표현) 둘 다 Paragraph 단위로만 검토돼서(GA/LG/LF와 달리 문서 전체
+# 시야가 없음), confirm이 "이 chunk엔 없다/모호하다"를 "문서 전체에 없다/모호하다"로 착각하는
+# 오탐이 실사용 중 확인됨(planqa-agent PR #28/#55, 백엔드는 review_agent 벤더링 정책상 소스를
+# 직접 못 고쳐서 qa_jobs.py에 우회로 추가했지만, 여긴 소스를 직접 소유하므로 정식으로 구현).
+# MI/AE만 검증하는 이유: 이 둘만 "문서 전체를 봐야 판단 가능한 예외조건"을 갖고 있고(AE-01/
+# AE-04의 "다른 곳에 정의/참조되면 예외"), 모든 카테고리에 걸면 비용/시간이 크게 늘어난다.
+_MI_VERIFY_SYSTEM = (
+    "You are double-checking a document-review agent's claim that specific information is "
+    "missing from a document — this exact failure mode (claiming X is missing when X is "
+    "actually stated elsewhere in the document, because the agent's own review only saw one "
+    "narrow chunk of it) has been observed live in production. You will be given the FULL "
+    "document text and the agent's claim. Re-read the ENTIRE document carefully, not just "
+    "whatever section the agent focused on, before deciding. This check has been over-"
+    "correcting in practice, throwing out real findings — only answer actually_missing=false "
+    "when you can point to the specific sentence elsewhere in the document that clearly states "
+    "the missing information; if you're not confident, or the closest match is only loosely "
+    "related, keep actually_missing=true.\n"
+    'Respond with JSON only: {"actually_missing": <bool>, "reason": "<one short sentence>"}'
+)
+
+_AE_VERIFY_SYSTEM = (
+    "You are double-checking a document-review agent's claim that a specific phrase is "
+    "ambiguous/vague (모호한 표현) — this category is vulnerable to the same narrow-context "
+    "failure mode as missing-information claims: a number, referent, or actor that looks "
+    "unspecified in isolation may actually be defined or referenced elsewhere in the same "
+    "document (e.g. a quantity defined in another section and referenced here per AE-01's own "
+    "exception condition, a pronoun whose antecedent is clear from surrounding context, an "
+    "actor implied by a system-wide policy stated elsewhere per AE-04's exception). You will "
+    "be given the FULL document text and the agent's claim. Re-read the ENTIRE document "
+    "carefully, not just whatever section the agent focused on, before deciding whether the "
+    "flagged text is genuinely ambiguous in context. This check has been over-correcting in "
+    "practice, throwing out real findings — only answer actually_ambiguous=false when you can "
+    "point to the specific sentence elsewhere in the document that clearly resolves the "
+    "ambiguity; if you're not confident, or the closest match is only loosely related, keep "
+    "actually_ambiguous=true.\n"
+    'Respond with JSON only: {"actually_ambiguous": <bool>, "reason": "<one short sentence>"}'
+)
+
+
+def _verify_mi_finding(document_text: str, issue: Issue, llm: LLMClient) -> bool:
+    prompt = (
+        f"Full document:\n{document_text}\n\n"
+        f"Agent's claim — location: {issue.location!r}\n"
+        f"  what's allegedly missing: {issue.description!r}\n"
+        f"  rationale: {issue.rationale!r}\n"
+        f"  quoted context: {issue.original_text!r}\n\n"
+        "Return the JSON."
+    )
+    try:
+        response = llm.complete_json(system=_MI_VERIFY_SYSTEM, prompt=prompt)
+    except Exception:  # noqa: BLE001 - a verification failure must not block/hide the original finding
+        return True
+    if not isinstance(response, dict):
+        return True
+    return bool(response.get("actually_missing", True))
+
+
+def _verify_ae_finding(document_text: str, issue: Issue, llm: LLMClient) -> bool:
+    prompt = (
+        f"Full document:\n{document_text}\n\n"
+        f"Agent's claim — location: {issue.location!r}\n"
+        f"  flagged text: {issue.original_text!r}\n"
+        f"  what's allegedly ambiguous: {issue.description!r}\n"
+        f"  rationale: {issue.rationale!r}\n\n"
+        "Return the JSON."
+    )
+    try:
+        response = llm.complete_json(system=_AE_VERIFY_SYSTEM, prompt=prompt)
+    except Exception:  # noqa: BLE001 - a verification failure must not block/hide the original finding
+        return True
+    if not isinstance(response, dict):
+        return True
+    return bool(response.get("actually_ambiguous", True))
+
+
+_FALSE_POSITIVE_VERIFIERS: dict[str, Callable[[str, Issue, LLMClient], bool]] = {
+    "MI": _verify_mi_finding,
+    "AE": _verify_ae_finding,
+}
+
+
+def _verify_false_positives(
+    issues: tuple[Issue, ...], document_text: str, rulebook: RuleBook, llm: LLMClient, events: list[CallEvent]
+) -> tuple[Issue, ...]:
+    verified: list[Issue] = []
+    for issue in issues:
+        verify = _FALSE_POSITIVE_VERIFIERS.get(rulebook.category_of(issue.rule_id) or "")
+        if verify is None:
+            verified.append(issue)
+            continue
+        kept = record_call(
+            llm,
+            stage="verify_fp",
+            tier=None,
+            rule_ids=(issue.rule_id,),
+            events=events,
+            call=lambda issue=issue, verify=verify: verify(document_text, issue, llm),
+        )
+        if kept:
+            verified.append(issue)
+    return tuple(verified)
 
 
 # ---- 타문서 정합성(XDC) — 참고문서가 있을 때만 활성화되는 별도 confirm 트랙 ----
@@ -640,10 +745,17 @@ def review_document(
                 if error:
                     tier_errors.append(error)
 
+    deduped_issues = tuple(dedupe_issues(all_issues))
+    try:
+        verified_issues = _verify_false_positives(deduped_issues, document_text, rulebook, confirm_llm, events)
+    except Exception as error:  # noqa: BLE001 - a verification-stage failure must not drop every finding
+        verified_issues = deduped_issues
+        tier_errors.append(f"MI/AE 오탐 재검증 실패: {error}")
+
     return ReviewResult(
         doc_id=doc_id,
         global_context=global_context,
-        issues=tuple(dedupe_issues(all_issues)),
+        issues=verified_issues,
         tier_errors=tuple(tier_errors),
         call_events=tuple(events),
     )
