@@ -38,7 +38,7 @@ def test_parse_decision_records_builds_records_keyed_by_chunk_location():
     from planqa_review.document import Chunk
     from planqa_schemas.schema import Level
 
-    chunks = [Chunk(level=Level.PARAGRAPH, location="1-1", text="x")]
+    chunks = [Chunk(level=Level.PARAGRAPH, location="1-1", text="신청 기한: 상품 수령일로부터 14일 이내")]
     raw = [
         {
             "chunk_index": 0,
@@ -66,6 +66,38 @@ def test_parse_decision_records_skips_incomplete_or_out_of_range_items():
         {"chunk_index": 5, "quote": "q", "policy_subject": "반품", "attribute": "신청 기한"},  # 범위 밖
         "not a dict",
     ]
+    assert xdc.parse_decision_records(raw, "DOC-REF", chunks) == []
+
+
+def test_parse_decision_records_corrects_a_misreported_chunk_index():
+    # 실사용 확인된 버그 재현: 스크리닝 LLM이 quote는 정확히 뽑았는데 chunk_index를 착각해서
+    # 엉뚱한(근처) 청크 번호를 보고하는 경우 — quote가 실제로 들어있는 청크를 찾아 그 위치를
+    # 대신 써야 한다("4-1"이 "5-1"로 잘못 붙는 걸 막는 검증).
+    from planqa_review.document import Chunk
+    from planqa_schemas.schema import Level
+
+    chunks = [
+        Chunk(level=Level.PARAGRAPH, location="4-1. 반품 가능 기한", text="단순 변심: 상품 수령일로부터 7일 이내"),
+        Chunk(level=Level.PARAGRAPH, location="5-1. 포인트 적립", text="사진 후기 작성: 500포인트"),
+    ]
+    raw = [
+        {
+            "chunk_index": 1,  # LLM이 착각한 인덱스 — 실제 quote는 chunks[0]에 있음
+            "quote": "단순 변심: 상품 수령일로부터 7일 이내",
+            "policy_subject": "반품",
+            "attribute": "신청 기한",
+        }
+    ]
+    [record] = xdc.parse_decision_records(raw, "DOC-020", chunks)
+    assert record.location == "4-1. 반품 가능 기한"
+
+
+def test_parse_decision_records_drops_a_record_whose_quote_matches_no_chunk():
+    from planqa_review.document import Chunk
+    from planqa_schemas.schema import Level
+
+    chunks = [Chunk(level=Level.PARAGRAPH, location="1-1", text="전혀 다른 내용")]
+    raw = [{"chunk_index": 0, "quote": "어디에도 없는 인용문", "policy_subject": "반품", "attribute": "신청 기한"}]
     assert xdc.parse_decision_records(raw, "DOC-REF", chunks) == []
 
 
