@@ -67,11 +67,38 @@ _DECISION_RECORD_SYSTEM = (
 )
 
 
-def _build_record(item: dict, doc_id: str, location: str) -> DecisionRecord | None:
+def _normalize_whitespace(text: str) -> str:
+    return " ".join(text.split())
+
+
+# 실사용 확인된 버그: 스크리닝 LLM이 quote 자체는 정확히 뽑으면서 그게 몇 번 청크에서 나왔는지
+# (chunk_index)는 착각해서 보고하는 경우가 있다 — 그러면 결정문이 엉뚱한(근처) 위치에 조용히
+# 잘못 붙는다("4-1. 반품 가능 기한"이 "5-1. 포인트 적립"으로 잡히는 식). chunk_index를 무조건
+# 신뢰하지 않고, 그 청크에 실제로 quote가 들어있는지 먼저 확인한다 — 없으면 quote를 실제로 담고
+# 있는 청크를 전체에서 찾아 그 위치를 대신 쓴다(공백 차이는 무시). 어디에도 없으면(quote 자체가
+# 손상됐거나 완전히 지어낸 경우) 위치를 신뢰할 수 없으니 레코드를 버린다 — 틀린 위치로 XDC 이슈를
+# 만드는 것보다 그 결정문을 놓치는 게 낫다.
+def _resolve_location(chunks: list[Chunk], chunk_index: int, quote: str) -> str | None:
+    normalized_quote = _normalize_whitespace(quote)
+    if not normalized_quote:
+        return None
+    reported = chunks[chunk_index]
+    if normalized_quote in _normalize_whitespace(reported.text):
+        return reported.location
+    for chunk in chunks:
+        if normalized_quote in _normalize_whitespace(chunk.text):
+            return chunk.location
+    return None
+
+
+def _build_record(item: dict, doc_id: str, chunks: list[Chunk], chunk_index: int) -> DecisionRecord | None:
     quote = str(item.get("quote", "")).strip()
     policy_subject = str(item.get("policy_subject", "")).strip()
     attribute = str(item.get("attribute", "")).strip()
     if not quote or not policy_subject or not attribute:
+        return None
+    location = _resolve_location(chunks, chunk_index, quote)
+    if location is None:
         return None
     terms = item.get("canonical_terms")
     canonical_terms = tuple(str(t).strip() for t in terms if str(t).strip()) if isinstance(terms, list) else ()
@@ -103,7 +130,7 @@ def parse_decision_records(raw: object, doc_id: str, chunks: list[Chunk]) -> lis
         chunk_index = item.get("chunk_index")
         if not (isinstance(chunk_index, int) and 0 <= chunk_index < len(chunks)):
             continue
-        record = _build_record(item, doc_id, chunks[chunk_index].location)
+        record = _build_record(item, doc_id, chunks, chunk_index)
         if record is not None:
             records.append(record)
     return records
