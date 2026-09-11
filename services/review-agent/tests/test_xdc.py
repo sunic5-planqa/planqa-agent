@@ -92,13 +92,17 @@ def test_parse_decision_records_corrects_a_misreported_chunk_index():
     assert record.location == "4-1. 반품 가능 기한"
 
 
-def test_parse_decision_records_drops_a_record_whose_quote_matches_no_chunk():
+def test_parse_decision_records_falls_back_to_reported_chunk_when_quote_matches_none():
+    # quote를 검증할 수 없다고 결정문 자체를 버리면(첫 구현) "레퍼런스 넣어도 XDC가 0건"이라는 더
+    # 큰 문제가 생긴다(실사용 확인, 2026-09-12) — 못 찾으면 LLM이 보고한 chunk_index를 그대로
+    # 믿고 레코드는 살린다.
     from planqa_review.document import Chunk
     from planqa_schemas.schema import Level
 
     chunks = [Chunk(level=Level.PARAGRAPH, location="1-1", text="전혀 다른 내용")]
     raw = [{"chunk_index": 0, "quote": "어디에도 없는 인용문", "policy_subject": "반품", "attribute": "신청 기한"}]
-    assert xdc.parse_decision_records(raw, "DOC-REF", chunks) == []
+    [record] = xdc.parse_decision_records(raw, "DOC-REF", chunks)
+    assert record.location == "1-1"
 
 
 def test_match_candidates_signal_a_structured_key_match():

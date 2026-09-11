@@ -75,20 +75,22 @@ def _normalize_whitespace(text: str) -> str:
 # (chunk_index)는 착각해서 보고하는 경우가 있다 — 그러면 결정문이 엉뚱한(근처) 위치에 조용히
 # 잘못 붙는다("4-1. 반품 가능 기한"이 "5-1. 포인트 적립"으로 잡히는 식). chunk_index를 무조건
 # 신뢰하지 않고, 그 청크에 실제로 quote가 들어있는지 먼저 확인한다 — 없으면 quote를 실제로 담고
-# 있는 청크를 전체에서 찾아 그 위치를 대신 쓴다(공백 차이는 무시). 어디에도 없으면(quote 자체가
-# 손상됐거나 완전히 지어낸 경우) 위치를 신뢰할 수 없으니 레코드를 버린다 — 틀린 위치로 XDC 이슈를
-# 만드는 것보다 그 결정문을 놓치는 게 낫다.
-def _resolve_location(chunks: list[Chunk], chunk_index: int, quote: str) -> str | None:
+# 있는 청크를 전체에서 찾아 그 위치를 대신 쓴다(공백 차이는 무시).
+#
+# 어디서도 quote를 못 찾으면(패러프레이즈됐거나 표 서식이 섞여 정확히 일치하지 않는 경우 등, LLM
+# 응답에서 드물지 않다) 레코드를 버리지 않고 LLM이 보고한 chunk_index를 그대로 신뢰한다 — 처음엔
+# "위치를 확신 못하면 버린다"로 했었는데, 그러면 레퍼런스를 제대로 넣어도 XDC 발견 자체가 통째로
+# 사라지는 게 더 큰 문제였다(실사용 확인: DOC-020+DOC-005로 검토했는데 0건, 2026-09-12). 위치가
+# 살짝 틀릴 수 있는 것보다 발견을 놓치는 쪽이 이 도구 목적상 더 나쁘다.
+def _resolve_location(chunks: list[Chunk], chunk_index: int, quote: str) -> str:
     normalized_quote = _normalize_whitespace(quote)
-    if not normalized_quote:
-        return None
     reported = chunks[chunk_index]
-    if normalized_quote in _normalize_whitespace(reported.text):
+    if not normalized_quote or normalized_quote in _normalize_whitespace(reported.text):
         return reported.location
     for chunk in chunks:
         if normalized_quote in _normalize_whitespace(chunk.text):
             return chunk.location
-    return None
+    return reported.location
 
 
 def _build_record(item: dict, doc_id: str, chunks: list[Chunk], chunk_index: int) -> DecisionRecord | None:
@@ -98,8 +100,6 @@ def _build_record(item: dict, doc_id: str, chunks: list[Chunk], chunk_index: int
     if not quote or not policy_subject or not attribute:
         return None
     location = _resolve_location(chunks, chunk_index, quote)
-    if location is None:
-        return None
     terms = item.get("canonical_terms")
     canonical_terms = tuple(str(t).strip() for t in terms if str(t).strip()) if isinstance(terms, list) else ()
     return DecisionRecord(
